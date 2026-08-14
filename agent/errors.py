@@ -20,35 +20,49 @@ class ErrorCategory(StrEnum):
 class AgentError(Exception):
     """Typed orchestrator failure."""
 
-    def __init__(self, category: ErrorCategory, message: str) -> None:
+    def __init__(
+        self,
+        category: ErrorCategory,
+        message: str,
+        *,
+        code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
+        self.code = code
 
     @classmethod
-    def invalid_input(cls, message: str) -> AgentError:
-        return cls(ErrorCategory.INVALID_INPUT, message)
+    def invalid_input(cls, message: str, *, code: str | None = None) -> AgentError:
+        return cls(ErrorCategory.INVALID_INPUT, message, code=code)
 
     @classmethod
-    def environment_failure(cls, message: str) -> AgentError:
-        return cls(ErrorCategory.ENVIRONMENT_FAILURE, message)
+    def invalid_spec(cls, message: str) -> AgentError:
+        return cls(ErrorCategory.INVALID_INPUT, message, code="INVALID_SPEC")
 
     @classmethod
-    def policy_violation(cls, message: str) -> AgentError:
-        return cls(ErrorCategory.POLICY_VIOLATION, message)
+    def environment_failure(cls, message: str, *, code: str | None = None) -> AgentError:
+        return cls(ErrorCategory.ENVIRONMENT_FAILURE, message, code=code)
 
     @classmethod
-    def escalation_required(cls, message: str) -> AgentError:
-        return cls(ErrorCategory.ESCALATION_REQUIRED, message)
+    def policy_violation(cls, message: str, *, code: str | None = None) -> AgentError:
+        return cls(ErrorCategory.POLICY_VIOLATION, message, code=code)
 
     @classmethod
-    def internal_failure(cls, message: str) -> AgentError:
-        return cls(ErrorCategory.INTERNAL_FAILURE, message)
+    def escalation_required(cls, message: str, *, code: str | None = None) -> AgentError:
+        return cls(ErrorCategory.ESCALATION_REQUIRED, message, code=code)
+
+    @classmethod
+    def internal_failure(cls, message: str, *, code: str | None = None) -> AgentError:
+        return cls(ErrorCategory.INTERNAL_FAILURE, message, code=code)
 
     def to_dict(self) -> dict[str, str]:
-        return {
+        payload = {
             "category": self.category.value,
             "message": str(self),
         }
+        if self.code is not None:
+            payload["code"] = self.code
+        return payload
 
 
 def error_category_of(error: BaseException) -> ErrorCategory:

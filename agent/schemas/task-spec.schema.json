@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://md-agent-pipeline.local/schemas/task-spec.schema.json",
+  "title": "Task Spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "status",
+    "base_branch",
+    "target_branch",
+    "allowed_paths",
+    "repair_attempt_limit",
+    "review_attempt_limit",
+    "objective",
+    "non_goals",
+    "forbidden_actions",
+    "architecture_invariants",
+    "tasks",
+    "final_verification"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1 },
+    "base_branch": { "type": "string", "minLength": 1 },
+    "target_branch": { "type": "string", "minLength": 1 },
+    "allowed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "forbidden_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "repair_attempt_limit": { "type": "integer", "minimum": 0 },
+    "review_attempt_limit": { "type": "integer", "minimum": 0 },
+    "objective": { "type": "string", "minLength": 1 },
+    "non_goals": { "type": "string", "minLength": 1 },
+    "forbidden_actions": { "type": "string", "minLength": 1 },
+    "architecture_invariants": { "type": "string", "minLength": 1 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "final_verification": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "depends_on",
+        "requirement",
+        "acceptance_criteria",
+        "validation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          }
+        },
+        "requirement": { "type": "string", "minLength": 1 },
+        "acceptance_criteria": { "type": "string", "minLength": 1 },
+        "validation": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

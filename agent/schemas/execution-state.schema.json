@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://md-agent-pipeline.local/schemas/execution-state.schema.json",
+  "title": "Execution State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "taskId",
+    "state",
+    "currentTask",
+    "completedTasks",
+    "repairAttempts",
+    "reviewAttempts",
+    "lastValidation",
+    "lastResult",
+    "branch",
+    "pullRequest"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "taskId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "IMPLEMENTING",
+        "VALIDATING",
+        "TASK_COMPLETED",
+        "FINAL_VALIDATING",
+        "PR_CREATED",
+        "IN_REVIEW",
+        "READY_FOR_HUMAN",
+        "COMPLETED",
+        "INVALID_SPEC",
+        "SCOPE_VIOLATION",
+        "FAILED",
+        "ESCALATED"
+      ]
+    },
+    "currentTask": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        }
+      ]
+    },
+    "completedTasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+      }
+    },
+    "repairAttempts": { "type": "integer", "minimum": 0 },
+    "reviewAttempts": { "type": "integer", "minimum": 0 },
+    "lastValidation": { "type": ["string", "null"] },
+    "lastResult": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "enum": ["PASSED", "FAILED"] }
+      ]
+    },
+    "branch": { "type": "string", "minLength": 1 },
+    "pullRequest": {
+      "type": ["string", "integer", "null"]
+    }
+  }
+}
