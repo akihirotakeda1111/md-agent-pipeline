@@ -1,0 +1,29 @@
+{
+  "task_spec": {
+    "directory": "specs/tasks"
+  },
+  "state": {
+    "directory": ".agent/state"
+  },
+  "codex": {
+    "bin": null,
+    "model": null,
+    "timeout_seconds": null,
+    "sandbox": null
+  },
+  "retry": {
+    "repair_attempt_limit": 3,
+    "review_attempt_limit": 3
+  },
+  "review": {
+    "classifier_model": null,
+    "max_comments_per_run": null
+  },
+  "notification": {
+    "enabled": false,
+    "channel": null
+  },
+  "coderabbit": {
+    "actor": "coderabbitai[bot]"
+  }
+}

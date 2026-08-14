@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# Runtime state (orchestrator-owned; do not commit task JSON)
+.agent/state/*.json
+!.agent/state/.gitkeep
+
+# Local env
+.env
+.env.*

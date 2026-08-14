@@ -1,0 +1,212 @@
+"""Load orchestrator configuration from a single JSON file."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from agent.errors import AgentError, ErrorCategory
+
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+
+
+@dataclass(frozen=True)
+class TaskSpecConfig:
+    directory: str
+
+
+@dataclass(frozen=True)
+class StateConfig:
+    directory: str
+
+
+@dataclass(frozen=True)
+class CodexConfig:
+    bin: str | None
+    model: str | None
+    timeout_seconds: int | None
+    sandbox: str | None
+
+
+@dataclass(frozen=True)
+class RetryConfig:
+    repair_attempt_limit: int
+    review_attempt_limit: int
+
+
+@dataclass(frozen=True)
+class ReviewConfig:
+    classifier_model: str | None
+    max_comments_per_run: int | None
+
+
+@dataclass(frozen=True)
+class NotificationConfig:
+    enabled: bool
+    channel: str | None
+
+
+@dataclass(frozen=True)
+class CodeRabbitConfig:
+    actor: str
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    task_spec: TaskSpecConfig
+    state: StateConfig
+    codex: CodexConfig
+    retry: RetryConfig
+    review: ReviewConfig
+    notification: NotificationConfig
+    coderabbit: CodeRabbitConfig
+
+
+def load_config(path: Path | str | None = None) -> AgentConfig:
+    """Load and validate config. Missing/unreadable files are EnvironmentFailure."""
+    config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AgentError(
+            ErrorCategory.ENVIRONMENT_FAILURE,
+            f"config file not found: {config_path}",
+        ) from exc
+    except OSError as exc:
+        raise AgentError(
+            ErrorCategory.ENVIRONMENT_FAILURE,
+            f"config file could not be read: {config_path}",
+        ) from exc
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AgentError(
+            ErrorCategory.INVALID_INPUT,
+            f"config is not valid JSON: {config_path}",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise AgentError.invalid_input("config root must be an object")
+
+    return _parse_config(payload)
+
+
+def _parse_config(payload: dict[str, Any]) -> AgentConfig:
+    task_spec = _require_object(payload, "task_spec")
+    state = _require_object(payload, "state")
+    codex = _optional_object(payload, "codex")
+    retry = _optional_object(payload, "retry")
+    review = _optional_object(payload, "review")
+    notification = _optional_object(payload, "notification")
+    coderabbit = _optional_object(payload, "coderabbit")
+
+    return AgentConfig(
+        task_spec=TaskSpecConfig(
+            directory=_require_non_empty_str(task_spec, "directory", "task_spec")
+        ),
+        state=StateConfig(directory=_require_non_empty_str(state, "directory", "state")),
+        codex=CodexConfig(
+            bin=_optional_str(codex, "bin", "codex"),
+            model=_optional_str(codex, "model", "codex"),
+            timeout_seconds=_optional_int(codex, "timeout_seconds", "codex"),
+            sandbox=_optional_str(codex, "sandbox", "codex"),
+        ),
+        retry=RetryConfig(
+            repair_attempt_limit=_optional_non_negative_int(
+                retry, "repair_attempt_limit", "retry", default=3
+            ),
+            review_attempt_limit=_optional_non_negative_int(
+                retry, "review_attempt_limit", "retry", default=3
+            ),
+        ),
+        review=ReviewConfig(
+            classifier_model=_optional_str(review, "classifier_model", "review"),
+            max_comments_per_run=_optional_int(review, "max_comments_per_run", "review"),
+        ),
+        notification=NotificationConfig(
+            enabled=_optional_bool(notification, "enabled", "notification", default=False),
+            channel=_optional_str(notification, "channel", "notification"),
+        ),
+        coderabbit=CodeRabbitConfig(
+            actor=_optional_non_empty_str(
+                coderabbit, "actor", "coderabbit", default="coderabbitai[bot]"
+            ),
+        ),
+    )
+
+
+def _require_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    if key not in payload:
+        raise AgentError.invalid_input(f"missing required object: {key}")
+    value = payload[key]
+    if not isinstance(value, dict):
+        raise AgentError.invalid_input(f"{key} must be an object")
+    return value
+
+
+def _optional_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    if key not in payload or payload[key] is None:
+        return {}
+    value = payload[key]
+    if not isinstance(value, dict):
+        raise AgentError.invalid_input(f"{key} must be an object")
+    return value
+
+
+def _require_non_empty_str(obj: dict[str, Any], key: str, prefix: str) -> str:
+    if key not in obj:
+        raise AgentError.invalid_input(f"missing required field: {prefix}.{key}")
+    return _as_non_empty_str(obj[key], f"{prefix}.{key}")
+
+
+def _optional_non_empty_str(obj: dict[str, Any], key: str, prefix: str, *, default: str) -> str:
+    if key not in obj or obj[key] is None:
+        return default
+    return _as_non_empty_str(obj[key], f"{prefix}.{key}")
+
+
+def _optional_str(obj: dict[str, Any], key: str, prefix: str) -> str | None:
+    if key not in obj or obj[key] is None:
+        return None
+    value = obj[key]
+    if not isinstance(value, str):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be a string or null")
+    return value
+
+
+def _optional_int(obj: dict[str, Any], key: str, prefix: str) -> int | None:
+    if key not in obj or obj[key] is None:
+        return None
+    value = obj[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be an integer or null")
+    return value
+
+
+def _optional_non_negative_int(obj: dict[str, Any], key: str, prefix: str, *, default: int) -> int:
+    if key not in obj or obj[key] is None:
+        return default
+    value = obj[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be an integer")
+    if value < 0:
+        raise AgentError.invalid_input(f"{prefix}.{key} must be >= 0")
+    return value
+
+
+def _optional_bool(obj: dict[str, Any], key: str, prefix: str, *, default: bool) -> bool:
+    if key not in obj or obj[key] is None:
+        return default
+    value = obj[key]
+    if not isinstance(value, bool):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be a boolean")
+    return value
+
+
+def _as_non_empty_str(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AgentError.invalid_input(f"{field} must be a non-empty string")
+    return value
