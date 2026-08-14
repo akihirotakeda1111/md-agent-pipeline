@@ -39,6 +39,12 @@ python -m ruff check agent
 python -m ruff format --check agent
 ```
 
+## Integration Tests
+
+```text
+python agent/integration-tests/task-orchestration/run.py
+```
+
 ## Spec / state CLIs
 
 ```text

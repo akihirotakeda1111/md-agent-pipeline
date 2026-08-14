@@ -12,6 +12,9 @@ build/
 .agent/state/*.json
 !.agent/state/.gitkeep
 
+# Integration tests
+agent/integration-tests/**/reports/
+
 # Local env
 .env
 .env.*
