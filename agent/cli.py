@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from agent.codex_runner import resolve_task, run_codex
 from agent.errors import AgentError, ErrorCategory, error_category_of
 from agent.select import select_next_task
 from agent.spec import parse_spec, spec_to_dict
@@ -164,6 +165,24 @@ def run_select_task(argv: Sequence[str] | None = None) -> int:
             }
         )
         return EXIT_OK
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_codex_exec(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run official Codex CLI as a restricted implementation engine"
+    )
+    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument("--task", required=True, help="Current spec task id")
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        spec = parse_spec(args.spec)
+        task = resolve_task(spec, args.task)
+        result = run_codex(spec, task, repo_root=args.repo_root)
+        _print_json({"ok": result.exit_code == 0, **result.to_json_dict()})
+        return result.exit_code
     except Exception as exc:
         return _exit_for_error(exc)
 

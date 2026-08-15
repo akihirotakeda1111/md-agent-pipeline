@@ -13,7 +13,11 @@ def test_load_default_config() -> None:
 
     assert config.task_spec.directory == "specs/tasks"
     assert config.state.directory == ".agent/state"
-    assert config.codex.bin is None
+    assert config.codex.bin == "codex"
+    assert config.codex.package == "@openai/codex"
+    assert config.codex.version == "0.147.0"
+    assert config.codex.sandbox == "workspace-write"
+    assert config.codex.api_key_env == "CODEX_API_KEY"
     assert config.retry.repair_attempt_limit == 3
     assert config.retry.review_attempt_limit == 3
     assert config.review.classifier_model is None

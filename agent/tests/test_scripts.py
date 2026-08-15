@@ -89,3 +89,11 @@ def test_update_state_script_rejects_invalid_transition(tmp_path: Path) -> None:
     assert result.returncode == 3
     payload = json.loads(result.stdout)
     assert payload["code"] == "INVALID_TRANSITION"
+
+
+def test_run_codex_script_rejects_unknown_task() -> None:
+    result = _run("run-codex.py", "--spec", str(EXAMPLE_SPEC), "--task", "missing-task")
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "missing-task" in payload["message"]

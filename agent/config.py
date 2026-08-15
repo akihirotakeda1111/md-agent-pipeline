@@ -24,10 +24,14 @@ class StateConfig:
 
 @dataclass(frozen=True)
 class CodexConfig:
-    bin: str | None
+    bin: str
+    package: str
+    version: str
     model: str | None
-    timeout_seconds: int | None
-    sandbox: str | None
+    timeout_seconds: int
+    sandbox: str
+    api_key_env: str
+    ignore_user_config: bool
 
 
 @dataclass(frozen=True)
@@ -109,10 +113,16 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
         ),
         state=StateConfig(directory=_require_non_empty_str(state, "directory", "state")),
         codex=CodexConfig(
-            bin=_optional_str(codex, "bin", "codex"),
+            bin=_optional_non_empty_str(codex, "bin", "codex", default="codex"),
+            package=_optional_non_empty_str(codex, "package", "codex", default="@openai/codex"),
+            version=_optional_non_empty_str(codex, "version", "codex", default="0.147.0"),
             model=_optional_str(codex, "model", "codex"),
-            timeout_seconds=_optional_int(codex, "timeout_seconds", "codex"),
-            sandbox=_optional_str(codex, "sandbox", "codex"),
+            timeout_seconds=_optional_positive_int(codex, "timeout_seconds", "codex", default=1800),
+            sandbox=_optional_non_empty_str(codex, "sandbox", "codex", default="workspace-write"),
+            api_key_env=_optional_non_empty_str(
+                codex, "api_key_env", "codex", default="CODEX_API_KEY"
+            ),
+            ignore_user_config=_optional_bool(codex, "ignore_user_config", "codex", default=True),
         ),
         retry=RetryConfig(
             repair_attempt_limit=_optional_non_negative_int(
@@ -183,6 +193,17 @@ def _optional_int(obj: dict[str, Any], key: str, prefix: str) -> int | None:
     value = obj[key]
     if isinstance(value, bool) or not isinstance(value, int):
         raise AgentError.invalid_input(f"{prefix}.{key} must be an integer or null")
+    return value
+
+
+def _optional_positive_int(obj: dict[str, Any], key: str, prefix: str, *, default: int) -> int:
+    if key not in obj or obj[key] is None:
+        return default
+    value = obj[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be an integer")
+    if value <= 0:
+        raise AgentError.invalid_input(f"{prefix}.{key} must be > 0")
     return value
 
 

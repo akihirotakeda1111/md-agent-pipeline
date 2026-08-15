@@ -2,7 +2,7 @@
 
 Markdown Task Spec を決定論的 Orchestrator が解釈し、OpenAI Codex CLI へ実装を委譲するための基盤です。
 
-現在は Phase 2（Task Spec & Execution State）までです。Codex 実行、GitHub Actions、PR、CodeRabbit は未実装です。
+現在は Phase 3（Codex CLI Runner）までです。Validation / Repair、GitHub Actions、PR、CodeRabbit は未実装です。
 
 ## Language
 
@@ -24,7 +24,8 @@ agent/                 Orchestrator code
   select.py            Deterministic task selection
   scripts/             CLI entrypoints
   schemas/             JSON Schema
-  prompts/             Codex prompts (later phases)
+  prompts/             Codex implementation prompt
+  codex_runner.py      Official `codex exec` runner
   tests/
 .agent/state/          Orchestrator-owned runtime state
 specs/tasks/           Human-owned Task Specs
@@ -53,4 +54,7 @@ python agent/scripts/validate-spec.py specs/tasks/example-task.md
 python agent/scripts/init-state.py --spec specs/tasks/example-task.md
 python agent/scripts/update-state.py --task-id phase2-step2 --to RUNNING
 python agent/scripts/select-task.py --spec specs/tasks/example-task.md
+python agent/scripts/run-codex.py --spec specs/tasks/example-task.md --task task-1
 ```
+
+Codex CLI は公式 `@openai/codex@0.147.0` を pin します。認証は `CODEX_API_KEY` をそのプロセスにだけ渡します。
