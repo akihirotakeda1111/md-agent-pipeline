@@ -152,9 +152,7 @@ def snapshot(root: Path) -> dict[str, str]:
 
 def changed_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
     return sorted(
-        path
-        for path in before.keys() | after.keys()
-        if before.get(path) != after.get(path)
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
     )
 
 
@@ -180,8 +178,7 @@ def create_fake_launcher(bin_dir: Path, python: str, fake_script: Path) -> Path:
     else:
         launcher = bin_dir / "codex"
         launcher.write_text(
-            "#!/usr/bin/env sh\n"
-            f"exec {shlex.quote(python)} {shlex.quote(str(fake_script))} \"$@\"\n",
+            f'#!/usr/bin/env sh\nexec {shlex.quote(python)} {shlex.quote(str(fake_script))} "$@"\n',
             encoding="utf-8",
         )
         launcher.chmod(0o755)
@@ -525,7 +522,7 @@ def main() -> int:
     if args.real_codex and os.environ.get("RUN_CODEX_SMOKE_TEST") != "1":
         print("SKIP: set RUN_CODEX_SMOKE_TEST=1 to enable the Real Codex smoke test")
         return 0
-    
+
     repo_root = args.repo_root.resolve()
     required = [
         repo_root / "agent" / "scripts" / f"{name}.py"

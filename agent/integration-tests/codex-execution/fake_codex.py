@@ -9,7 +9,6 @@ import re
 import sys
 from pathlib import Path
 
-
 FAKE_VERSION = "codex-cli 0.147.0-phase3-fake"
 
 
