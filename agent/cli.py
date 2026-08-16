@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from agent.codex_runner import resolve_task, run_codex
+from agent.config import load_config
+from agent.cycle import run_task_cycle
 from agent.errors import AgentError, ErrorCategory, error_category_of
+from agent.gitutil import capture_snapshot, collect_changes
+from agent.scope import check_scope
 from agent.select import select_next_task
 from agent.spec import parse_spec, spec_to_dict
 from agent.state import (
@@ -21,6 +25,7 @@ from agent.state import (
     state_file_path,
     write_state,
 )
+from agent.validation import run_validation_text
 
 EXIT_OK = 0
 EXIT_ENVIRONMENT = 1
@@ -183,6 +188,69 @@ def run_codex_exec(argv: Sequence[str] | None = None) -> int:
         result = run_codex(spec, task, repo_root=args.repo_root)
         _print_json({"ok": result.exit_code == 0, **result.to_json_dict()})
         return result.exit_code
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_check_scope(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check working-tree paths against spec scope")
+    parser.add_argument("--spec", type=Path, required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        spec = parse_spec(args.spec)
+        snapshot = capture_snapshot(args.repo_root)
+        changes = collect_changes(args.repo_root, snapshot.base_sha)
+        result = check_scope(spec, changes)
+        _print_json({"ok": result.allowed, "base_sha": snapshot.base_sha, **result.to_json_dict()})
+        return EXIT_OK if result.allowed else EXIT_POLICY
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_validation(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run Task Spec validation commands")
+    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument("--task", required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        spec = parse_spec(args.spec)
+        task = resolve_task(spec, args.task)
+        cfg = load_config()
+        records = run_validation_text(
+            task.validation,
+            repo_root=args.repo_root,
+            task_id=task.id,
+            timeout_seconds=cfg.validation.timeout_seconds,
+        )
+        passed = all(record.passed for record in records)
+        _print_json({"ok": passed, "records": [record.to_json_dict() for record in records]})
+        return EXIT_OK if passed else EXIT_INVALID
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_task(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run one local task cycle: Codex, scope, validation, repair"
+    )
+    parser.add_argument("--spec", type=Path, required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        result = run_task_cycle(args.spec, repo_root=args.repo_root)
+        _print_json(
+            {
+                "ok": result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"},
+                **result.to_json_dict(),
+            }
+        )
+        if result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
+            return EXIT_OK
+        if result.outcome == "SCOPE_VIOLATION":
+            return EXIT_POLICY
+        return EXIT_INVALID
     except Exception as exc:
         return _exit_for_error(exc)
 

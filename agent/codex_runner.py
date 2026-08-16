@@ -227,13 +227,16 @@ def run_codex(
     config: AgentConfig | None = None,
     env: Mapping[str, str] | None = None,
     executor: Executor | None = None,
+    prompt: str | None = None,
 ) -> CodexRunResult:
     cfg = config or load_config()
     root = Path(repo_root)
     if not root.is_dir():
         raise AgentError.invalid_input(f"repository working directory not found: {root}")
 
-    prompt = build_implementation_prompt(spec, task, repo_root=root)
+    prompt_text = (
+        prompt if prompt is not None else build_implementation_prompt(spec, task, repo_root=root)
+    )
     child_env = build_codex_env(env, api_key_env=cfg.codex.api_key_env)
     secrets = [child_env[cfg.codex.api_key_env]] if cfg.codex.api_key_env in child_env else []
 
@@ -246,7 +249,7 @@ def run_codex(
             cwd=str(root),
             env=child_env,
             timeout=cfg.codex.timeout_seconds,
-            stdin=prompt,
+            stdin=prompt_text,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
         final_response = None

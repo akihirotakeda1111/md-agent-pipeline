@@ -97,3 +97,11 @@ def test_run_codex_script_rejects_unknown_task() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert "missing-task" in payload["message"]
+
+
+def test_check_scope_script_emits_json() -> None:
+    result = _run("check-scope.py", "--spec", str(EXAMPLE_SPEC))
+    payload = json.loads(result.stdout)
+    assert "allowed" in payload
+    assert "changed_paths" in payload
+    assert "base_sha" in payload

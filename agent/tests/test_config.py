@@ -18,6 +18,8 @@ def test_load_default_config() -> None:
     assert config.codex.version == "0.147.0"
     assert config.codex.sandbox == "workspace-write"
     assert config.codex.api_key_env == "CODEX_API_KEY"
+    assert config.validation.timeout_seconds == 600
+    assert config.validation.require_clean_worktree is True
     assert config.retry.repair_attempt_limit == 3
     assert config.retry.review_attempt_limit == 3
     assert config.review.classifier_model is None

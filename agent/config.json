@@ -19,6 +19,10 @@
     "repair_attempt_limit": 3,
     "review_attempt_limit": 3
   },
+  "validation": {
+    "timeout_seconds": 600,
+    "require_clean_worktree": true
+  },
   "review": {
     "classifier_model": null,
     "max_comments_per_run": null

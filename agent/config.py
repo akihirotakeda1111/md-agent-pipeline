@@ -41,6 +41,12 @@ class RetryConfig:
 
 
 @dataclass(frozen=True)
+class ValidationConfig:
+    timeout_seconds: int
+    require_clean_worktree: bool
+
+
+@dataclass(frozen=True)
 class ReviewConfig:
     classifier_model: str | None
     max_comments_per_run: int | None
@@ -63,6 +69,7 @@ class AgentConfig:
     state: StateConfig
     codex: CodexConfig
     retry: RetryConfig
+    validation: ValidationConfig
     review: ReviewConfig
     notification: NotificationConfig
     coderabbit: CodeRabbitConfig
@@ -103,6 +110,7 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
     state = _require_object(payload, "state")
     codex = _optional_object(payload, "codex")
     retry = _optional_object(payload, "retry")
+    validation = _optional_object(payload, "validation")
     review = _optional_object(payload, "review")
     notification = _optional_object(payload, "notification")
     coderabbit = _optional_object(payload, "coderabbit")
@@ -130,6 +138,14 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
             ),
             review_attempt_limit=_optional_non_negative_int(
                 retry, "review_attempt_limit", "retry", default=3
+            ),
+        ),
+        validation=ValidationConfig(
+            timeout_seconds=_optional_positive_int(
+                validation, "timeout_seconds", "validation", default=600
+            ),
+            require_clean_worktree=_optional_bool(
+                validation, "require_clean_worktree", "validation", default=True
             ),
         ),
         review=ReviewConfig(
