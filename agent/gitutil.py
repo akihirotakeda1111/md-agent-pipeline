@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent.codex_runner import build_allowlisted_env
 from agent.errors import AgentError
 
 
@@ -37,6 +38,7 @@ def run_git(repo_root: Path | str, *args: str) -> subprocess.CompletedProcess[st
         return subprocess.run(
             ["git", *args],
             cwd=str(repo_root),
+            env=build_allowlisted_env(),
             capture_output=True,
             text=True,
             check=False,

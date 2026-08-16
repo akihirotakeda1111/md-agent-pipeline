@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent.codex_runner import DENIED_ENV_ALWAYS, ENV_ALLOWLIST
+from agent.codex_runner import build_allowlisted_env
 from agent.errors import AgentError
 
 FENCE_RE = re.compile(r"```(?:[A-Za-z0-9_-]+)?\r?\n(.*?)```", re.DOTALL)
@@ -148,19 +148,7 @@ def inspect_command(parsed: ParsedCommand) -> str | None:
 
 
 def build_validation_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
-    incoming = dict(os.environ if source is None else source)
-    env: dict[str, str] = {}
-    allow = ENV_ALLOWLIST | VALIDATION_ENV_EXTRA
-    for key, value in incoming.items():
-        if key in DENIED_ENV_ALWAYS:
-            continue
-        if key.endswith(("_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL")):
-            continue
-        if "API_KEY" in key:
-            continue
-        if key in allow:
-            env[key] = value
-    return env
+    return build_allowlisted_env(source, extra_allow=VALIDATION_ENV_EXTRA)
 
 
 def run_validation_command(

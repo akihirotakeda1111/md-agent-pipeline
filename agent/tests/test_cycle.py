@@ -122,6 +122,18 @@ def _write_ok(cwd: str) -> None:
     dest.write_text("ok\n", encoding="utf-8")
 
 
+def _codex_count(events: list[tuple[str, dict[str, str]]]) -> int:
+    return sum(1 for kind, _ in events if kind == "codex")
+
+
+def _assert_gap_without_key(
+    events: list[tuple[str, dict[str, str]]], start: int, end: int | None = None
+) -> None:
+    gap = events[start:end]
+    assert {kind for kind, _ in gap} >= {"git", "validation"}
+    assert all("CODEX_API_KEY" not in env for _, env in gap)
+
+
 def test_collects_untracked_and_deleted_and_renamed(tmp_path: Path) -> None:
     repo, _ = _init_repo(tmp_path)
     snapshot = capture_snapshot(repo)
@@ -185,15 +197,30 @@ def test_cycle_scope_violation_does_not_complete(tmp_path: Path) -> None:
     assert "specs/leaked.md" in result.scope.violation_paths
 
 
-def test_cycle_repairs_then_passes(tmp_path: Path) -> None:
-    repo, spec_path = _init_repo(tmp_path)
-    calls = {"n": 0}
+def test_cycle_repairs_then_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, spec_path = _init_repo(tmp_path, limit=2)
+    monkeypatch.setenv("CODEX_API_KEY", "codex-secret")
+    events: list[tuple[str, dict[str, str]]] = []
+    real_run = subprocess.run
 
-    def executor(command: list[str], *, cwd: str, stdin: str, **_kwargs: object) -> ProcessResult:
-        calls["n"] += 1
+    def fake_child_run(*args: object, **kwargs: object):
+        env = kwargs.get("env")
+        assert env is not None
+        copied = dict(env)  # type: ignore[arg-type]
+        kind = "git" if args and args[0] and args[0][0] == "git" else "validation"  # type: ignore[index]
+        events.append((kind, copied))
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr("agent.gitutil.subprocess.run", fake_child_run)
+    monkeypatch.setattr("agent.validation.subprocess.run", fake_child_run)
+
+    def executor(
+        command: list[str], *, cwd: str, env: dict[str, str], stdin: str, **_kwargs: object
+    ) -> ProcessResult:
+        events.append(("codex", dict(env)))
         dest = Path(cwd) / "src" / "app.py"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text("ok\n" if calls["n"] > 1 else "bad\n", encoding="utf-8")
+        dest.write_text("ok\n" if _codex_count(events) > 2 else "bad\n", encoding="utf-8")
         assert "implementation engine" in stdin or "repairing" in stdin.lower()
         return ProcessResult(0, "done", "")
 
@@ -205,9 +232,21 @@ def test_cycle_repairs_then_passes(tmp_path: Path) -> None:
         persist_state=False,
     )
     assert result.outcome == "TASK_COMPLETED"
-    assert result.repair_attempts == 1
-    assert calls["n"] == 2
-    assert "Failed Validation" in str(calls) or True
+    assert result.repair_attempts == 2
+    kinds = [kind for kind, _ in events]
+    assert kinds.count("codex") == 3
+    first = kinds.index("codex")
+    second = kinds.index("codex", first + 1)
+    third = kinds.index("codex", second + 1)
+    assert events[:first]
+    assert all(kind == "git" and "CODEX_API_KEY" not in env for kind, env in events[:first])
+    assert "CODEX_API_KEY" in events[first][1]
+    _assert_gap_without_key(events, first + 1, second)
+    assert "CODEX_API_KEY" in events[second][1]
+    _assert_gap_without_key(events, second + 1, third)
+    assert "CODEX_API_KEY" in events[third][1]
+    _assert_gap_without_key(events, third + 1)
+    assert "CODEX_API_KEY" not in os.environ
 
 
 def test_cycle_hits_repair_limit(tmp_path: Path) -> None:
@@ -298,3 +337,47 @@ def test_dirty_worktree_is_fail_closed(tmp_path: Path) -> None:
             persist_state=False,
         )
     assert exc_info.value.code == "DIRTY_WORKTREE"
+
+
+def test_cycle_gives_codex_key_only_to_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, spec_path = _init_repo(tmp_path)
+    monkeypatch.setenv("CODEX_API_KEY", "codex-secret")
+    git_envs: list[dict[str, str]] = []
+    validation_envs: list[dict[str, str]] = []
+    real_run = subprocess.run
+
+    def fake_child_run(*args: object, **kwargs: object):
+        env = kwargs.get("env")
+        assert env is not None
+        copied = dict(env)  # type: ignore[arg-type]
+        assert "CODEX_API_KEY" not in copied
+        if args and args[0] and args[0][0] == "git":  # type: ignore[index]
+            git_envs.append(copied)
+        else:
+            validation_envs.append(copied)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr("agent.gitutil.subprocess.run", fake_child_run)
+    monkeypatch.setattr("agent.validation.subprocess.run", fake_child_run)
+    seen: dict[str, dict[str, str]] = {}
+
+    def executor(*_args: object, cwd: str, env: dict[str, str], **_kwargs: object) -> ProcessResult:
+        seen["codex"] = dict(env)
+        _write_ok(cwd)
+        return ProcessResult(0, "done", "")
+
+    result = run_task_cycle(
+        spec_path,
+        repo_root=repo,
+        executor=executor,
+        persist_state=False,
+    )
+    assert result.outcome == "TASK_COMPLETED"
+    assert seen["codex"]["CODEX_API_KEY"] == "codex-secret"
+    assert "CODEX_API_KEY" not in os.environ
+    assert git_envs
+    assert validation_envs
+    assert all("CODEX_API_KEY" not in env for env in git_envs)
+    assert all("CODEX_API_KEY" not in env for env in validation_envs)

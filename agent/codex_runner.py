@@ -80,6 +80,8 @@ DENIED_ENV_ALWAYS = frozenset(
     }
 )
 
+_SECRET_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL")
+
 Executor = Callable[..., "ProcessResult"]
 
 
@@ -193,22 +195,70 @@ def build_implementation_prompt(
     return "\n".join(sections) + "\n"
 
 
+def build_allowlisted_env(
+    source: Mapping[str, str] | None = None,
+    *,
+    extra_allow: frozenset[str] = frozenset(),
+    include_keys: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    """Build a fail-closed env. Secrets are omitted unless in include_keys."""
+    incoming = dict(os.environ if source is None else source)
+    allow = ENV_ALLOWLIST | extra_allow
+    env: dict[str, str] = {}
+    for key, value in incoming.items():
+        if key in include_keys:
+            env[key] = value
+            continue
+        if key in DENIED_ENV_ALWAYS:
+            continue
+        if key.endswith(_SECRET_SUFFIXES):
+            continue
+        if "API_KEY" in key:
+            continue
+        if key in allow:
+            env[key] = value
+    return env
+
+
 def build_codex_env(
     source: Mapping[str, str] | None = None,
     *,
     api_key_env: str = "CODEX_API_KEY",
 ) -> dict[str, str]:
-    incoming = dict(os.environ if source is None else source)
-    env: dict[str, str] = {}
-    for key, value in incoming.items():
-        if key in DENIED_ENV_ALWAYS:
-            continue
-        if key == api_key_env:
-            env[key] = value
-            continue
-        if key in ENV_ALLOWLIST:
-            env[key] = value
-    return env
+    """Allowlist plus the Codex credential. Other subprocesses do not inherit it."""
+    return build_allowlisted_env(source, include_keys=frozenset({api_key_env}))
+
+
+def detach_codex_api_key(
+    source: Mapping[str, str] | None = None,
+    *,
+    api_key_env: str = "CODEX_API_KEY",
+) -> tuple[Mapping[str, str] | None, str | None]:
+    """Remove the Codex credential from os.environ and from ``source``.
+
+    Returns ``(source_without_key, key_value)``. ``source is None`` means
+    subsequent subprocesses should read the scrubbed process environment.
+    """
+    os_value = os.environ.pop(api_key_env, None)
+    if source is None:
+        return None, os_value
+    copied = dict(source)
+    source_value = copied.pop(api_key_env, None)
+    return copied, source_value if source_value is not None else os_value
+
+
+def attach_codex_api_key(
+    source: Mapping[str, str] | None,
+    api_key: str | None,
+    *,
+    api_key_env: str = "CODEX_API_KEY",
+) -> Mapping[str, str] | None:
+    """Return an env mapping for the Codex subprocess only."""
+    if api_key is None:
+        return source
+    payload = dict(os.environ if source is None else source)
+    payload[api_key_env] = api_key
+    return payload
 
 
 def redact_secrets(text: str, secrets: list[str]) -> str:

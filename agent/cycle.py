@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from agent.classify import FailureClass, classify_output, classify_validation
-from agent.codex_runner import CodexRunResult, Executor, run_codex
+from agent.codex_runner import (
+    CodexRunResult,
+    Executor,
+    attach_codex_api_key,
+    detach_codex_api_key,
+    run_codex,
+)
 from agent.config import AgentConfig, load_config
 from agent.errors import AgentError
 from agent.gitutil import (
@@ -113,6 +119,7 @@ def run_task_cycle(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
+    rest_env, api_key = detach_codex_api_key(env, api_key_env=cfg.codex.api_key_env)
     snapshot = capture_snapshot(root)
     if state is not None:
         current = state
@@ -123,7 +130,7 @@ def run_task_cycle(
         current = read_state(path) if path.exists() else new_execution_state(parsed)
     selected = select_next_task(parsed, current)
     if selected is None:
-        return _final_verify_if_ready(parsed, current, root, cfg, env, persist_state)
+        return _final_verify_if_ready(parsed, current, root, cfg, rest_env, persist_state)
     # Uncommitted files from earlier tasks in this work unit are expected because
     # this phase does not commit. Any other dirty tree is fail-closed.
     if cfg.validation.require_clean_worktree and not current.completed_tasks:
@@ -133,14 +140,22 @@ def run_task_cycle(
     if persist_state:
         persist(root, current, cfg)
 
-    implement = run_codex(parsed, selected, repo_root=root, config=cfg, env=env, executor=executor)
+    implement = run_codex(
+        parsed,
+        selected,
+        repo_root=root,
+        config=cfg,
+        env=attach_codex_api_key(rest_env, api_key, api_key_env=cfg.codex.api_key_env),
+        executor=executor,
+    )
     return _after_codex(
         parsed,
         selected,
         current,
         root,
         cfg,
-        env,
+        rest_env,
+        api_key,
         executor,
         snapshot.base_sha,
         implement,
@@ -236,6 +251,7 @@ def _after_codex(
     root: Path,
     cfg: AgentConfig,
     env: Mapping[str, str] | None,
+    api_key: str | None,
     executor: Executor | None,
     base_sha: str,
     implement: CodexRunResult,
@@ -297,7 +313,17 @@ def _after_codex(
     if persist_state:
         persist(root, state, cfg)
     return _validate_and_maybe_repair(
-        spec, task, state, root, cfg, env, executor, base_sha, scope, persist_state
+        spec,
+        task,
+        state,
+        root,
+        cfg,
+        env,
+        api_key,
+        executor,
+        base_sha,
+        scope,
+        persist_state,
     )
 
 
@@ -308,6 +334,7 @@ def _validate_and_maybe_repair(
     root: Path,
     cfg: AgentConfig,
     env: Mapping[str, str] | None,
+    api_key: str | None,
     executor: Executor | None,
     base_sha: str,
     scope: ScopeCheckResult,
@@ -440,10 +467,20 @@ def _validate_and_maybe_repair(
         task,
         repo_root=root,
         config=cfg,
-        env=env,
+        env=attach_codex_api_key(env, api_key, api_key_env=cfg.codex.api_key_env),
         executor=executor,
         prompt=prompt,
     )
     return _after_codex(
-        spec, task, state, root, cfg, env, executor, base_sha, repair_run, persist_state
+        spec,
+        task,
+        state,
+        root,
+        cfg,
+        env,
+        api_key,
+        executor,
+        base_sha,
+        repair_run,
+        persist_state,
     )

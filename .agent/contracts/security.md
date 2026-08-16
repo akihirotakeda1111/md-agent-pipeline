@@ -25,6 +25,61 @@ Codex subprocessに不要なcredentialを渡してはいけない。
 
 GitHub write authorityはOrchestrator側だけに保持する。
 
+### Codex API Credential Isolation
+
+Codex API credentialは、Codex実行に必要な最小範囲にのみ公開する。
+
+GitHub ActionsではCodex API credentialをRepository Secret等のSecret Storeから取得し、
+Codexを実行するOrchestrator step以外のstepへ渡してはいけない。
+
+Orchestrator processがCodex API credentialを受け取った場合、
+そのcredentialを子processへ暗黙継承させてはいけない。
+
+原則:
+
+```text
+GitHub Actions Secret
+        ↓
+Orchestrator
+        │
+        ├─ Codex subprocess
+        │    └─ Codex API credentialあり
+        │
+        ├─ Validation subprocess
+        │    └─ Codex API credentialなし
+        │
+        ├─ Git subprocess
+        │    └─ Codex API credentialなし
+        │
+        └─ Other subprocess
+             └─ Codex API credentialなし
+```
+
+Codex API credentialは、Codex subprocessのenvironmentへ明示的に注入する。
+
+Validation、Git、repository-controlled command、その他のsubprocessは、
+明示的に構築されたsanitized environmentで実行し、
+Codex API credentialを含むSecretを暗黙継承してはいけない。
+
+OrchestratorがGitHub Actionsのstep environmentからCodex API credentialを受け取る場合は、
+必要な値を取得した後、通常のprocess environmentから除去し、
+Codex起動時にのみ明示的に再注入する。
+
+以下を禁止する:
+
+- Codex API credentialをworkflow全体のenvironmentへ設定する
+- Codex API credentialをjob全体のenvironmentへ設定する
+- Validation commandへCodex API credentialを渡す
+- Git commandへCodex API credentialを渡す
+- repository-controlled subprocessへCodex API credentialを渡す
+- Codex API credentialをlogへ出力する
+- Codex API credentialをartifactへ保存する
+- Codex API credentialをrepositoryへ保存する
+- 親processのenvironmentを無条件に子processへ継承する
+
+新しいsubprocessを追加する場合も、
+Secretを必要とすることが明示されていない限りsanitized environmentを使用する。
+
 ---
 
 ## Forbidden Runtime Actions

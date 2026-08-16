@@ -9,9 +9,12 @@ import pytest
 from agent.codex_runner import (
     ProcessResult,
     _default_executor,
+    attach_codex_api_key,
+    build_allowlisted_env,
     build_codex_command,
     build_codex_env,
     build_implementation_prompt,
+    detach_codex_api_key,
     redact_secrets,
     resolve_task,
     run_codex,
@@ -97,6 +100,33 @@ def test_env_allowlist_excludes_github_and_openai_keys() -> None:
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert "DATABASE_URL" not in env
     assert "REVIEW_CLASSIFIER_API_KEY" not in env
+
+
+def test_non_codex_allowlist_excludes_codex_api_key() -> None:
+    env = build_allowlisted_env(
+        {
+            "PATH": "/usr/bin",
+            "CODEX_API_KEY": "codex-secret",
+            "GITHUB_TOKEN": "gh-write-token",
+            "PYTHONPATH": "/opt/app",
+        }
+    )
+    assert env["PATH"] == "/usr/bin"
+    assert "CODEX_API_KEY" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "PYTHONPATH" not in env
+
+
+def test_detach_codex_api_key_scrubs_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CODEX_API_KEY", "codex-secret")
+    rest, key = detach_codex_api_key()
+    assert rest is None
+    assert key == "codex-secret"
+    assert "CODEX_API_KEY" not in os.environ
+    attached = attach_codex_api_key(rest, key)
+    assert attached is not None
+    assert attached["CODEX_API_KEY"] == "codex-secret"
+    assert "CODEX_API_KEY" not in os.environ
 
 
 def test_secret_redaction() -> None:
