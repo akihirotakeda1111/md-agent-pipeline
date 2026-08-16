@@ -131,6 +131,7 @@ def build_codex_command(
     command = [
         cfg.bin,
         "exec",
+        "--skip-git-repo-check",
         "--sandbox",
         cfg.sandbox,
         "--output-last-message",
