@@ -1,8 +1,8 @@
 # Orchestrator (`agent/`)
 
-Phase 4 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair。
+Phase 5 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair、GitHub Actions からの安全な起動。
 
-GitHub Actions / Commit / Push / PR / CodeRabbit は未実装です。
+Commit / Push / PR / Resume / CodeRabbit は未実装です。
 
 ## Modules
 
@@ -29,6 +29,9 @@ GitHub Actions / Commit / Push / PR / CodeRabbit は未実装です。
 | `scripts/check-scope.py` | 差分の Scope Check |
 | `scripts/run-validation.py` | Orchestrator による Validation |
 | `scripts/run-task.py` | Codex → Scope → Validation → Repair |
+| `intake.py` | GHA parse-spec / loop prevention / history / execution guard |
+| `scripts/prepare-intake.py` | Spec parse と GITHUB_OUTPUT。Invalid Spec は非ゼロ終了 |
+| `scripts/prepare-execute.py` | Git history と Execution State guard |
 | `schemas/` | `task-spec.schema.json` / `execution-state.schema.json` |
 | `prompts/implementation.md` / `prompts/repair.md` | Codex 向け contract |
 | `tests/` | unit tests |
@@ -79,3 +82,7 @@ Codex 実行前に uncommitted change がある場合、agent 由来差分と区
 ## Scope
 
 実際の Git 差分（tracked + untracked + rename/delete）を `allowed_paths` / `forbidden_paths` と照合します。1件でも違反があれば `SCOPE_VIOLATION` とし、Task completed にしません。`run_task_cycle()` は Orchestrator 自身の `.agent/state/{spec.id}.json` だけ scope 対象から外します。`.agent/state/**` 全体が Codex 変更から保護されていることまでは保証しません。
+
+## GitHub Actions
+
+`.github/workflows/agent-execute.yml` は parse-spec job のあと、`should_execute == true` のときだけ execute job を開始します。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec（parse 失敗、複数 Spec、path 不正）は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は `valid=true` / `should_execute=false` で SUCCESS し、execute を skip します。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。checkout は `actions/checkout@v7` で `fetch-depth: 0` と `persist-credentials: false` です。permissions は `contents: read` のみです。

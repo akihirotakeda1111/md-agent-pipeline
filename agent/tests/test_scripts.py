@@ -105,3 +105,60 @@ def test_check_scope_script_emits_json() -> None:
     assert "allowed" in payload
     assert "changed_paths" in payload
     assert "base_sha" in payload
+
+
+def test_prepare_intake_script_writes_github_output(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "specs" / "tasks"
+    spec_dir.mkdir(parents=True)
+    spec_path = spec_dir / "demo.md"
+    spec_path.write_text(EXAMPLE_SPEC.read_text(encoding="utf-8"), encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "phase5@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Phase5"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "add", "specs/tasks/demo.md"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "spec"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    output_path = tmp_path / "github_output"
+    result = _run(
+        "prepare-intake.py",
+        "--repo-root",
+        str(tmp_path),
+        "--event-name",
+        "workflow_dispatch",
+        "--ref-name",
+        "main",
+        "--sha",
+        "unused",
+        "--spec-path",
+        "specs/tasks/demo.md",
+        "--github-output",
+        str(output_path),
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is True
+    assert payload["should_execute"] is True
+    assert payload["task_id"] == "phase2-step2"
+    written = output_path.read_text(encoding="utf-8")
+    assert "task_id=phase2-step2" in written
+    assert "should_execute=true" in written

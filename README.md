@@ -2,7 +2,7 @@
 
 Markdown Task Spec を決定論的 Orchestrator が解釈し、OpenAI Codex CLI へ実装を委譲するための基盤です。
 
-現在は Phase 4（Scope, Validation & Repair）までです。GitHub Actions、Commit / Push、PR、CodeRabbit は未実装です。
+現在は Phase 5（GitHub Actions Execution）までです。Commit / Push、PR、Resume、CodeRabbit は未実装です。
 
 ## Language
 
@@ -28,6 +28,7 @@ agent/                 Orchestrator code
   codex_runner.py      Official `codex exec` runner
   gitutil.py / scope.py / validation.py / classify.py / cycle.py
   tests/
+.github/workflows/     Task Spec intake + execute (no commit/PR)
 .agent/state/          Orchestrator-owned runtime state
 specs/tasks/           Human-owned Task Specs
 ```
@@ -97,6 +98,10 @@ python agent/scripts/run-codex.py --spec specs/tasks/example-task.md --task task
 python agent/scripts/check-scope.py --spec specs/tasks/example-task.md
 python agent/scripts/run-validation.py --spec specs/tasks/example-task.md --task task-1
 python agent/scripts/run-task.py --spec specs/tasks/example-task.md
+python agent/scripts/prepare-intake.py --event-name workflow_dispatch --ref-name main --sha HEAD --spec-path specs/tasks/example-task.md
+python agent/scripts/prepare-execute.py --spec specs/tasks/example-task.md
 ```
+
+GitHub Actions は `.github/workflows/agent-execute.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。リポジトリ Secret `CODEX_API_KEY` は execute job の Orchestrator step にだけ渡します。
 
 Codex CLI は公式 `@openai/codex@0.147.0` を pin します。認証は `CODEX_API_KEY` をそのプロセスにだけ渡します。

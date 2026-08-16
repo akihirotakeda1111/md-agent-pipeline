@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,6 +15,7 @@ from agent.config import load_config
 from agent.cycle import run_task_cycle
 from agent.errors import AgentError, ErrorCategory, error_category_of
 from agent.gitutil import capture_snapshot, collect_changes
+from agent.intake import evaluate_intake, prepare_execute, write_github_output
 from agent.scope import check_scope
 from agent.select import select_next_task
 from agent.spec import parse_spec, spec_to_dict
@@ -190,6 +192,85 @@ def run_codex_exec(argv: Sequence[str] | None = None) -> int:
         return result.exit_code
     except Exception as exc:
         return _exit_for_error(exc)
+
+
+def run_prepare_intake(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Parse Task Spec intake for GitHub Actions without running Codex"
+    )
+    _repo_root_arg(parser)
+    parser.add_argument("--event-name", default=None)
+    parser.add_argument("--ref-name", default=None)
+    parser.add_argument("--sha", default=None)
+    parser.add_argument("--before", default=None)
+    parser.add_argument("--spec-path", default=None)
+    parser.add_argument(
+        "--github-output",
+        type=Path,
+        default=None,
+        help="Append GITHUB_OUTPUT name=value lines (official environment file)",
+    )
+    args = parser.parse_args(argv)
+    try:
+        result = evaluate_intake(
+            repo_root=args.repo_root,
+            event_name=_env_or_arg(args.event_name, "GITHUB_EVENT_NAME"),
+            ref_name=_env_or_arg(args.ref_name, "GITHUB_REF_NAME"),
+            sha=_env_or_arg(args.sha, "GITHUB_SHA"),
+            before_sha=_optional_env_or_arg(args.before, "EVENT_BEFORE", "GITHUB_EVENT_BEFORE"),
+            spec_path=_optional_env_or_arg(args.spec_path, "SPEC_PATH", "INPUT_SPEC_PATH"),
+        )
+        output_file = args.github_output
+        if output_file is None and "GITHUB_OUTPUT" in os.environ:
+            output_file = Path(os.environ["GITHUB_OUTPUT"])
+        if output_file is not None:
+            write_github_output(output_file, result.to_output_map())
+        _print_json(result.to_json_dict())
+        return EXIT_OK if result.valid else EXIT_INVALID
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_prepare_execute(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Assert Git history and execution-state guard before Codex"
+    )
+    parser.add_argument("--spec", type=Path, required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        spec = prepare_execute(args.spec, repo_root=args.repo_root)
+        _print_json(
+            {
+                "ok": True,
+                "spec_id": spec.id,
+                "base_branch": spec.base_branch,
+                "target_branch": spec.target_branch,
+            }
+        )
+        return EXIT_OK
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def _env_or_arg(explicit: str | None, *env_names: str) -> str:
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    for name in env_names:
+        value = os.environ.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    raise AgentError.invalid_input(f"missing required value: {env_names[0]}")
+
+
+def _optional_env_or_arg(explicit: str | None, *env_names: str) -> str | None:
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    for name in env_names:
+        value = os.environ.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
 
 
 def run_check_scope(argv: Sequence[str] | None = None) -> int:
