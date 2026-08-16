@@ -1,0 +1,15 @@
+{
+  "status": "SCOPE_VIOLATION",
+  "repair_attempts": 1,
+  "selected_task": "implement",
+  "changed_paths": [
+    "agent/config.json",
+    "app/result.txt"
+  ],
+  "absent_files": [
+    "FINAL_MUST_NOT_RUN"
+  ],
+  "exit_codes": [
+    3
+  ]
+}

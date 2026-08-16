@@ -77,6 +77,14 @@ RUN_CODEX_SMOKE_TEST=1 python3 agent/integration-tests/codex-execution/run.py --
 
 Real Codex Smoke Testには、公式Codex CLIのインストールと認証が必要です。`RUN_CODEX_SMOKE_TEST=1`が設定されていない場合、Real Codexは実行されません。
 
+### Phase 4 — Scope / Validation / Repair
+
+通常のIntegration TestではFake Codexを使用し、APIコストやネットワーク依存を発生させません。実Codex CLI smokeは実装していません。
+
+```bash
+python agent/integration-tests/scope-validation-repair/run.py
+```
+
 ## Spec / state CLIs
 
 ```text

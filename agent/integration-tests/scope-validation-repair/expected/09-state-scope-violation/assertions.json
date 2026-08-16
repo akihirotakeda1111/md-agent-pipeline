@@ -1,0 +1,16 @@
+{
+  "status": "SCOPE_VIOLATION",
+  "repair_attempts": 0,
+  "selected_task": "implement",
+  "changed_paths": [],
+  "violation_paths": [
+    ".agent/state/leaked.json"
+  ],
+  "absent_files": [
+    "VALIDATION_MUST_NOT_RUN",
+    "FINAL_MUST_NOT_RUN"
+  ],
+  "exit_codes": [
+    3
+  ]
+}
