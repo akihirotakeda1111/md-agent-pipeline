@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "selected_task": "add-double",
+  "workspace": "changed",
+  "expected_changed_files": ["src/math_utils.py"],
+  "exact_files": ["src/math_utils.py"],
+  "unchanged_files": [],
+  "absent_files": ["PHASE3_VALIDATION_MUST_NOT_RUN", "PHASE3_FINAL_VERIFICATION_MUST_NOT_RUN"]
+}

@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "selected_task": "ensure-greeting",
+  "workspace": "unchanged",
+  "expected_changed_files": [],
+  "exact_files": ["app/greeting.txt"],
+  "unchanged_files": ["app/greeting.txt"],
+  "absent_files": ["PHASE3_VALIDATION_MUST_NOT_RUN", "PHASE3_FINAL_VERIFICATION_MUST_NOT_RUN"]
+}

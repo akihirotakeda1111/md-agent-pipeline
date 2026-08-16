@@ -1,0 +1,9 @@
+[
+  {"case":"01-create-file","fixture":"01-create-file.PASS.md","marker":"CASE_01_CREATE_FILE"},
+  {"case":"02-modify-file","fixture":"02-modify-file.PASS.md","marker":"CASE_02_MODIFY_FILE"},
+  {"case":"03-inspect-then-modify","fixture":"03-inspect-then-modify.PASS.md","marker":"CASE_03_INSPECT_THEN_MODIFY"},
+  {"case":"04-add-function","fixture":"04-add-function.PASS.md","marker":"CASE_04_ADD_FUNCTION"},
+  {"case":"05-multiple-files","fixture":"05-multiple-files.PASS.md","marker":"CASE_05_MULTIPLE_FILES"},
+  {"case":"06-no-change","fixture":"06-no-change.PASS.md","marker":"CASE_06_NO_CHANGE"},
+  {"case":"07-protected-path","fixture":"07-protected-path.BLOCKED.md","marker":"CASE_07_PROTECTED_PATH_BLOCKED"}
+]

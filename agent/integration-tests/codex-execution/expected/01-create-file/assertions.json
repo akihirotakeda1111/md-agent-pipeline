@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "selected_task": "create-greeting",
+  "workspace": "changed",
+  "expected_changed_files": ["app/greeting.txt"],
+  "exact_files": ["app/greeting.txt"],
+  "unchanged_files": [".fixture-root"],
+  "absent_files": ["PHASE3_VALIDATION_MUST_NOT_RUN", "PHASE3_FINAL_VERIFICATION_MUST_NOT_RUN"]
+}

@@ -42,9 +42,39 @@ python -m ruff format --check agent
 
 ## Integration Tests
 
-```text
+すべてプロジェクトルートから実行します。
+
+### Phase 2 — Task Orchestration
+
+```bash
 python agent/integration-tests/task-orchestration/run.py
 ```
+
+### Phase 3 — Codex Execution
+
+通常のIntegration TestではFake Codexを使用し、APIコストやネットワーク依存を発生させません。
+
+```bash
+python agent/integration-tests/codex-execution/run.py
+```
+
+### Phase 3 — Real Codex Smoke Test
+
+実Codex CLIを使用するテストはLinux環境で実行します。Windowsを使用する場合は、Windowsネイティブ環境ではなくWSL上で実行してください。
+
+デフォルトではCase 01（`01-create-file`）だけを実行します。
+
+```bash
+RUN_CODEX_SMOKE_TEST=1 python3 agent/integration-tests/codex-execution/run.py --real-codex
+```
+
+Real Codex対象の全ケースを実行する場合は、`--all-cases`を指定します。
+
+```bash
+RUN_CODEX_SMOKE_TEST=1 python3 agent/integration-tests/codex-execution/run.py --real-codex --all-cases
+```
+
+Real Codex Smoke Testには、公式Codex CLIのインストールと認証が必要です。`RUN_CODEX_SMOKE_TEST=1`が設定されていない場合、Real Codexは実行されません。
 
 ## Spec / state CLIs
 

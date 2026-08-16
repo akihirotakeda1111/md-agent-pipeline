@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "selected_task": "update-banner",
+  "workspace": "changed",
+  "expected_changed_files": ["app/banner.txt"],
+  "exact_files": ["config.txt", "app/banner.txt"],
+  "unchanged_files": ["config.txt"],
+  "absent_files": ["PHASE3_VALIDATION_MUST_NOT_RUN", "PHASE3_FINAL_VERIFICATION_MUST_NOT_RUN"],
+  "inspection_evidence": "config.txt"
+}
