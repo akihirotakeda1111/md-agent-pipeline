@@ -104,4 +104,4 @@ python agent/scripts/prepare-execute.py --spec specs/tasks/example-task.md
 
 GitHub Actions は `.github/workflows/agent-execute.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。リポジトリ Secret `CODEX_API_KEY` は execute job の Orchestrator step にだけ渡します。
 
-Codex CLI は公式 `@openai/codex@0.147.0` を pin します。認証は `CODEX_API_KEY` をそのプロセスにだけ渡します。
+Codex CLI は公式 `@openai/codex@0.147.0` を pin します。認証は `CODEX_API_KEY` をそのプロセスにだけ渡します。MVP ではモデルも `agent/config.json` の `codex.model`で Repository 側に明示固定し、ローカルと CI で同じ値を使います。`~/.codex` などのユーザー設定や CLI 暗黙デフォルトには依存しません。

@@ -75,6 +75,12 @@ codex exec --sandbox workspace-write --output-last-message <file> --json --ignor
 - `--full-auto` は deprecated のため使わない
 - Git commit / push / PR / state update は行わない
 
+### Model (MVP)
+
+MVP では Codex モデルを Repository の `agent/config.json`（`codex.model`）で明示固定します。ローカルと GitHub Actions は同じ Repository Config を使い、CLI の暗黙デフォルトや `~/.codex` 等のユーザー設定には依存しません。`ignore_user_config: true` を維持します。目的はローカルと CI の再現性です。
+
+Task 単位のモデル切替、`allowed_models`、model profile、環境変数による override は MVP 対象外です（Deferred）。将来必要なら Repository default + override 方式へ拡張できます。
+
 ## Working-tree policy
 
 Codex 実行前に uncommitted change がある場合、agent 由来差分と区別できないため **fail closed**（`DIRTY_WORKTREE`）です。同一 Work Unit で先行 Task が残した未 commit 差分だけは許可します（この Phase は commit しません）。

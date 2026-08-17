@@ -9,7 +9,7 @@
     "bin": "codex",
     "package": "@openai/codex",
     "version": "0.147.0",
-    "model": null,
+    "model": "gpt-5.4-mini",
     "timeout_seconds": 1800,
     "sandbox": "workspace-write",
     "api_key_env": "CODEX_API_KEY",
