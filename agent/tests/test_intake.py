@@ -218,21 +218,25 @@ def test_required_history_is_available(tmp_path: Path) -> None:
     assert_required_history(repo, base_branch="main")
 
 
-def test_execution_guard_blocks_in_flight_and_terminal(tmp_path: Path) -> None:
+def test_execution_guard_allows_retry_and_blocks_escalated(tmp_path: Path) -> None:
     repo, spec_path = _init_repo(tmp_path)
     spec = parse_spec(spec_path)
     pending = init_state(spec, repo)
     assert_execution_guard(spec, repo)
     running = apply_transition(pending, ExecutionStatus.RUNNING, current_task="task-1")
     write_state(state_file_path(repo, spec.id), running)
-    with pytest.raises(AgentError) as in_flight:
-        assert_execution_guard(spec, repo)
-    assert in_flight.value.code == "EXECUTION_GUARD"
+    assert_execution_guard(spec, repo)
     failed = apply_transition(running, ExecutionStatus.FAILED)
     write_state(state_file_path(repo, spec.id), failed)
-    with pytest.raises(AgentError) as terminal:
+    assert_execution_guard(spec, repo)
+    pending = init_state(spec, repo, overwrite=True)
+    running = apply_transition(pending, ExecutionStatus.RUNNING, current_task="task-1")
+    escalated = apply_transition(running, ExecutionStatus.ESCALATED)
+    write_state(state_file_path(repo, spec.id), escalated)
+    with pytest.raises(AgentError) as blocked:
         assert_execution_guard(spec, repo)
-    assert "FAILED" in str(terminal.value)
+    assert blocked.value.code == "EXECUTION_GUARD"
+    assert "ESCALATED" in str(blocked.value)
 
 
 def test_dispatch_rejects_path_escape(tmp_path: Path) -> None:

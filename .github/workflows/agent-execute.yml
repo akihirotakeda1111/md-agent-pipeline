@@ -1,4 +1,4 @@
-# Task Spec intake and Codex execution. Does not commit, push, or open PRs.
+# Task Spec intake, Codex execution, then Orchestrator Git / PR delivery.
 #
 # Intake contract:
 # - valid: the selected Task Spec parsed successfully
@@ -8,6 +8,11 @@
 #   (do not add if: always()).
 # - Non-base-branch push (loop prevention): parse-spec succeeds, should_execute=false,
 #   execute is skipped, workflow succeeds.
+#
+# Write authority isolation:
+# - execute has contents: read and the Codex API secret. persist-credentials: false.
+# - deliver has contents/pull-requests/issues write and GITHUB_TOKEN. No CODEX_API_KEY.
+# - Codex subprocess never receives GitHub write credentials.
 #
 # Concurrency contract:
 # - Execute uses job-level concurrency per task_id with cancel-in-progress: false.
@@ -39,6 +44,10 @@
 # - https://github.com/actions/setup-python
 # - https://github.com/actions/setup-node
 # - https://github.com/openai/codex-action
+# - https://github.com/actions/upload-artifact
+# - https://github.com/actions/download-artifact
+# - https://docs.github.com/en/rest/pulls/pulls
+# - https://docs.github.com/en/rest/issues/labels
 
 name: Agent Execute
 
@@ -147,4 +156,49 @@ jobs:
         env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           GITHUB_TOKEN: ""
-        run: python agent/scripts/run-task.py --spec "${{ needs.parse-spec.outputs.spec_path }}"
+        run: python agent/scripts/run-work-unit.py --spec "${{ needs.parse-spec.outputs.spec_path }}" --report-dir "${{ runner.temp }}/agent-report"
+
+      - name: Upload work report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-work-${{ needs.parse-spec.outputs.task_id }}
+          path: ${{ runner.temp }}/agent-report
+          if-no-files-found: error
+
+  deliver:
+    name: Deliver commit and pull request
+    needs: [parse-spec, execute]
+    if: ${{ always() && needs.parse-spec.result == 'success' && needs.parse-spec.outputs.should_execute == 'true' && needs.execute.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install orchestrator
+        run: python -m pip install -e .
+
+      - name: Download work report
+        uses: actions/download-artifact@v7
+        with:
+          name: agent-work-${{ needs.parse-spec.outputs.task_id }}
+          path: ${{ runner.temp }}/agent-report
+
+      - name: Commit, push, and open pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: python agent/scripts/deliver.py --spec "${{ needs.parse-spec.outputs.spec_path }}" --report-dir "${{ runner.temp }}/agent-report"

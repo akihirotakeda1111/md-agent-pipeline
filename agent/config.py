@@ -56,6 +56,7 @@ class ReviewConfig:
 class NotificationConfig:
     enabled: bool
     channel: str | None
+    mention: str | None
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,7 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
         notification=NotificationConfig(
             enabled=_optional_bool(notification, "enabled", "notification", default=False),
             channel=_optional_str(notification, "channel", "notification"),
+            mention=_optional_str(notification, "mention", "notification"),
         ),
         coderabbit=CodeRabbitConfig(
             actor=_optional_non_empty_str(

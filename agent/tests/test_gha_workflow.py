@@ -62,25 +62,34 @@ def test_execute_uses_task_id_concurrency() -> None:
     assert "queue: max is not used" in text
 
 
-def test_permissions_are_explicit_and_read_only() -> None:
+def test_permissions_isolate_codex_from_github_write() -> None:
     payload, _ = _load()
+    jobs = payload["jobs"]
     assert payload["permissions"] == {"contents": "read"}
-    for job in payload["jobs"].values():
-        assert job["permissions"] == {"contents": "read"}
-        assert "write" not in yaml.safe_dump(job["permissions"])
+    assert jobs["parse-spec"]["permissions"] == {"contents": "read"}
+    assert jobs["execute"]["permissions"] == {"contents": "read"}
+    assert jobs["deliver"]["permissions"] == {
+        "contents": "write",
+        "pull-requests": "write",
+        "issues": "write",
+    }
+    assert "CODEX_API_KEY" not in yaml.safe_dump(jobs["deliver"])
+    assert "run-work-unit.py" not in yaml.safe_dump(jobs["deliver"])
+    assert "openai/codex-action" not in yaml.safe_dump(jobs["deliver"])
 
 
-def test_checkout_fetches_history_without_persisting_credentials() -> None:
+def test_checkout_persists_credentials_only_on_deliver() -> None:
     payload, _ = _load()
-    for job in payload["jobs"].values():
+    expected = {"parse-spec": False, "execute": False, "deliver": True}
+    for name, persist in expected.items():
         checkout = next(
             step
-            for step in job["steps"]
+            for step in payload["jobs"][name]["steps"]
             if str(step.get("uses", "")).startswith("actions/checkout@")
         )
         assert checkout["uses"] == "actions/checkout@v7"
         assert checkout["with"]["fetch-depth"] == 0
-        assert checkout["with"]["persist-credentials"] is False
+        assert checkout["with"]["persist-credentials"] is persist
 
 
 def test_codex_secret_is_not_globally_exposed() -> None:
@@ -94,7 +103,7 @@ def test_codex_secret_is_not_globally_exposed() -> None:
     assert "env" not in execute
     secret_steps = [step for step in execute["steps"] if "CODEX_API_KEY" in yaml.safe_dump(step)]
     assert len(secret_steps) == 1
-    assert "run-task.py" in secret_steps[0]["run"]
+    assert "run-work-unit.py" in secret_steps[0]["run"]
     assert secret_steps[0]["env"]["CODEX_API_KEY"] == "${{ secrets.CODEX_API_KEY }}"
     assert secret_steps[0]["env"]["GITHUB_TOKEN"] == ""
     setup_dump = yaml.safe_dump([step for step in execute["steps"] if step is not secret_steps[0]])
@@ -124,16 +133,39 @@ def test_codex_action_bootstraps_sandbox_without_replacing_orchestrator() -> Non
     assert "danger-full-access" not in yaml.safe_dump(bootstrap)
     assert inputs["openai-api-key"] == "unused-bootstrap-placeholder"
     assert "secrets." not in str(inputs["openai-api-key"])
-    run_task = next(step for step in steps if "run-task.py" in str(step.get("run", "")))
-    assert steps.index(bootstrap) < steps.index(run_task)
-    assert steps[-1] is run_task
-    assert "sudo" not in yaml.safe_dump(run_task)
+    run_unit = next(step for step in steps if "run-work-unit.py" in str(step.get("run", "")))
+    upload = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+    )
+    assert steps.index(bootstrap) < steps.index(run_unit)
+    assert steps.index(run_unit) < steps.index(upload)
+    assert steps[-1] is upload
+    assert "sudo" not in yaml.safe_dump(run_unit)
     assert any("actions/setup-python@" in str(item) for item in uses)
     assert any("actions/setup-node@" in str(item) for item in uses)
     assert any("npm install -g" in run for _, _, run in names_or_uses)
     jobs_text = yaml.safe_dump(payload["jobs"])
     assert "self-hosted" not in jobs_text
     assert "danger-full-access" not in jobs_text
+
+
+def test_deliver_job_uses_write_token_without_codex() -> None:
+    payload, _ = _load()
+    deliver = payload["jobs"]["deliver"]
+    assert deliver["needs"] == ["parse-spec", "execute"]
+    assert "always()" in str(deliver["if"])
+    download = next(
+        step
+        for step in deliver["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact@")
+    )
+    assert download["uses"] == "actions/download-artifact@v7"
+    run_deliver = next(
+        step for step in deliver["steps"] if "deliver.py" in str(step.get("run", ""))
+    )
+    assert run_deliver["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    assert "CODEX_API_KEY" not in yaml.safe_dump(run_deliver)
+    assert payload["jobs"]["execute"]["steps"][-1]["uses"] == "actions/upload-artifact@v7"
 
 
 def test_feature_branch_push_is_not_unconditional_intake() -> None:

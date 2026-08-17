@@ -13,6 +13,7 @@ from typing import Any
 from agent.codex_runner import resolve_task, run_codex
 from agent.config import load_config
 from agent.cycle import run_task_cycle
+from agent.delivery import run_delivery
 from agent.errors import AgentError, ErrorCategory, error_category_of
 from agent.gitutil import capture_snapshot, collect_changes
 from agent.intake import evaluate_intake, prepare_execute, write_github_output
@@ -28,6 +29,7 @@ from agent.state import (
     write_state,
 )
 from agent.validation import run_validation_text
+from agent.workunit import run_work_unit
 
 EXIT_OK = 0
 EXIT_ENVIRONMENT = 1
@@ -332,6 +334,53 @@ def run_task(argv: Sequence[str] | None = None) -> int:
         if result.outcome == "SCOPE_VIOLATION":
             return EXIT_POLICY
         return EXIT_INVALID
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_work_unit_cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run every remaining task plus final verification without Git writes"
+    )
+    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument("--report-dir", type=Path, required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        report = run_work_unit(args.spec, repo_root=args.repo_root, report_dir=args.report_dir)
+        _print_json(
+            {
+                "ok": report.final_verification_passed or report.outcome == "ALREADY_DELIVERED",
+                **report.to_json_dict(),
+            }
+        )
+        if report.outcome in {"FINAL_VERIFICATION_PASSED", "ALREADY_DELIVERED"}:
+            return EXIT_OK
+        if report.outcome == "SCOPE_VIOLATION":
+            return EXIT_POLICY
+        if report.outcome == "FAILED":
+            return EXIT_ENVIRONMENT
+        return EXIT_INVALID
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_deliver_cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Commit, push, and open a pull request from a work-unit report"
+    )
+    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument("--report-dir", type=Path, required=True)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        result = run_delivery(args.spec, repo_root=args.repo_root, report_dir=args.report_dir)
+        _print_json({"ok": result.outcome == "PR_CREATED", **result.to_json_dict()})
+        if result.outcome == "PR_CREATED":
+            return EXIT_OK
+        if result.outcome == "FAILED":
+            return EXIT_ENVIRONMENT
+        return EXIT_POLICY
     except Exception as exc:
         return _exit_for_error(exc)
 

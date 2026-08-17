@@ -1,8 +1,8 @@
 # Orchestrator (`agent/`)
 
-Phase 5 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair、GitHub Actions からの安全な起動。
+Phase 6 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair、GitHub Actions、Commit / Push / PR、Restart / GitHub Reconciliation、Observability。
 
-Commit / Push / PR / Resume / CodeRabbit は未実装です。
+CodeRabbit レビューループは未実装です。
 
 ## Modules
 
@@ -28,10 +28,17 @@ Commit / Push / PR / Resume / CodeRabbit は未実装です。
 | `scripts/run-codex.py` | Codex runner CLI。State / Git / PR は操作しない |
 | `scripts/check-scope.py` | 差分の Scope Check |
 | `scripts/run-validation.py` | Orchestrator による Validation |
-| `scripts/run-task.py` | Codex → Scope → Validation → Repair |
+| `scripts/run-task.py` | Codex → Scope → Validation → Repair（1 Task） |
 | `intake.py` | GHA parse-spec / loop prevention / history / execution guard |
 | `scripts/prepare-intake.py` | Spec parse と GITHUB_OUTPUT。Invalid Spec は非ゼロ終了 |
 | `scripts/prepare-execute.py` | Git history と Execution State guard |
+| `scripts/run-work-unit.py` | 全 Task + Final Verification。Git write しない |
+| `scripts/deliver.py` | Commit / Push / PR / labels / summary |
+| `gitwrite.py` | Orchestrator の branch / commit / push（force 禁止） |
+| `github_api.py` | 公式 GitHub REST（PR / labels / issues） |
+| `reconcile.py` | 同一 workspace の State（あれば）と Git / PR の照合。GHA 再実行は State 無しで最初から |
+| `delivery.py` / `workunit.py` | write job と execute report |
+| `events.py` / `summary.py` / `notify.py` | JSONL events、job summary、escalation notice |
 | `schemas/` | `task-spec.schema.json` / `execution-state.schema.json` |
 | `prompts/implementation.md` / `prompts/repair.md` | Codex 向け contract |
 | `tests/` | unit tests |
@@ -74,7 +81,7 @@ codex exec --sandbox workspace-write --output-last-message <file> --json --ignor
 - Codex subprocess の env には `GITHUB_TOKEN` / `OPENAI_API_KEY` を渡さない
 - GitHub Actions の `openai/codex-action` 入力 `openai-api-key` は上記の env とは別物。sandbox bootstrap 用の placeholder であり、`OPENAI_API_KEY` を Codex へ渡すことではない
 - `--full-auto` は deprecated のため使わない
-- Git commit / push / PR / state update は行わない
+- Git commit / push / PR は Orchestrator の deliver job が行う。Codex subprocess には GitHub write token を渡さない
 
 ### Model (MVP)
 
@@ -84,12 +91,12 @@ Task 単位のモデル切替、`allowed_models`、model profile、環境変数�
 
 ## Working-tree policy
 
-Codex 実行前に uncommitted change がある場合、agent 由来差分と区別できないため **fail closed**（`DIRTY_WORKTREE`）です。同一 Work Unit で先行 Task が残した未 commit 差分だけは許可します（この Phase は commit しません）。
+Codex 実行前に uncommitted change がある場合、agent 由来差分と区別できないため **fail closed**（`DIRTY_WORKTREE`）です。同一 Work Unit で先行 Task が残した未 commit 差分だけは許可します。Final Verification 通過後、deliver job が Commit / Push / PR します。
 
 ## Scope
 
-実際の Git 差分（tracked + untracked + rename/delete）を `allowed_paths` / `forbidden_paths` と照合します。1件でも違反があれば `SCOPE_VIOLATION` とし、Task completed にしません。`run_task_cycle()` は Orchestrator 自身の `.agent/state/{spec.id}.json` だけ scope 対象から外します。`.agent/state/**` 全体が Codex 変更から保護されていることまでは保証しません。
+実際の Git 差分（tracked + untracked + rename/delete + gitignored の `.agent/state/**`）を `allowed_paths` / `forbidden_paths` と照合します。1件でも違反があれば `SCOPE_VIOLATION` とし、Task completed にしません。execute の `run_task_cycle()` は Orchestrator 自身の `.agent/state/{spec.id}.json` だけ scope 対象から外します。deliver は patch 適用後の実差分を再検査し、`.agent/state/**` を除外しません。patch から `.agent/state/**` を落とさないので、Codex の漏れを見逃しません。
 
 ## GitHub Actions
 
-`.github/workflows/agent-execute.yml` は parse-spec job のあと、`should_execute == true` のときだけ execute job を開始します。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec（parse 失敗、複数 Spec、path 不正）は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は `valid=true` / `should_execute=false` で SUCCESS し、execute を skip します。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。checkout は `actions/checkout@v7` で `fetch-depth: 0` と `persist-credentials: false` です。permissions は `contents: read` のみです。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-task.py` です。Action は Orchestrator を代替せず、`CODEX_API_KEY` も受け取りません。公式 Action が Linux sandbox bootstrap を走らせるには `openai-api-key` が空だとスキップされるため、secret ではない placeholder `unused-bootstrap-placeholder` を渡します。この入力で Responses API proxy も起きますが、本番認証には使いません。sandbox は `workspace-write` のままです。
+`.github/workflows/agent-execute.yml` は parse-spec のあと `should_execute == true` のとき execute を開始し、execute の report artifact を deliver job が受け取ります。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は SUCCESS し execute / deliver を skip します。execute は `contents: read` と `CODEX_API_KEY` のみ、`persist-credentials: false` です。deliver は `contents: write` / `pull-requests: write` / `issues: write` を持ち、`CODEX_API_KEY` は持ちません。checkout は `actions/checkout@v7`、`fetch-depth: 0` です。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-work-unit.py` → artifact upload です。`.agent/state` は ephemeral runtime metadata です。GHA 再実行では Resume に使わず最初からやり直します。ローカルでは同一 workspace の実行中制御に使えます。deliver は同一 work unit の既存 PR だけを再利用し、reuse 時は patch 再適用も Final Verification 再実行もしません。MVP では `.agent/state/*.json` を commit しません。Phase 6 が適用する label は `agent:ready` / `agent:escalated` / `agent:failed` です。

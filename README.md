@@ -2,7 +2,7 @@
 
 Markdown Task Spec を決定論的 Orchestrator が解釈し、OpenAI Codex CLI へ実装を委譲するための基盤です。
 
-現在は Phase 5（GitHub Actions Execution）までです。Commit / Push、PR、Resume、CodeRabbit は未実装です。
+現在は Phase 6（Git, PR, Restart / GitHub Reconciliation & Observability）までです。CodeRabbit レビューループは未実装です。
 
 ## Language
 
@@ -27,8 +27,9 @@ agent/                 Orchestrator code
   prompts/             Codex implementation / repair prompts
   codex_runner.py      Official `codex exec` runner
   gitutil.py / scope.py / validation.py / classify.py / cycle.py
+  gitwrite.py / github_api.py / reconcile.py / delivery.py
   tests/
-.github/workflows/     Task Spec intake + execute (no commit/PR)
+.github/workflows/     Task Spec intake, execute, commit/PR deliver
 .agent/state/          Orchestrator-owned runtime state
 specs/tasks/           Human-owned Task Specs
 ```
@@ -112,10 +113,28 @@ python agent/scripts/run-codex.py --spec specs/tasks/example-task.md --task task
 python agent/scripts/check-scope.py --spec specs/tasks/example-task.md
 python agent/scripts/run-validation.py --spec specs/tasks/example-task.md --task task-1
 python agent/scripts/run-task.py --spec specs/tasks/example-task.md
+python agent/scripts/run-work-unit.py --spec specs/tasks/example-task.md --report-dir /tmp/agent-report
+python agent/scripts/deliver.py --spec specs/tasks/example-task.md --report-dir /tmp/agent-report
 python agent/scripts/prepare-intake.py --event-name workflow_dispatch --ref-name main --sha HEAD --spec-path specs/tasks/example-task.md
 python agent/scripts/prepare-execute.py --spec specs/tasks/example-task.md
 ```
 
-GitHub Actions は `.github/workflows/agent-execute.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。execute job は checkout → Python / Node → 依存 install → `openai/codex-action` による sandbox bootstrap → `run-task.py` の順です。Action は prompt なしで GitHub-hosted runner 上の `workspace-write` sandbox を通す準備だけをし、Orchestrator の代替にはしません。リポジトリ Secret `CODEX_API_KEY` は execute job の Orchestrator step にだけ渡し、Action には渡しません。公式 Action が Linux sandbox bootstrap を走らせるには `openai-api-key` が空だとスキップされるため、secret ではない placeholder `unused-bootstrap-placeholder` を渡します。この入力で Responses API proxy も起きますが、本番認証には使いません。
+GitHub Actions は `.github/workflows/agent-execute.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。
+
+execute job（`contents: read`）は checkout → Python / Node → 依存 install → `openai/codex-action` による sandbox bootstrap → `run-work-unit.py` の順です。Action は prompt なしで GitHub-hosted runner 上の `workspace-write` sandbox を通す準備だけをし、Orchestrator の代替にはしません。リポジトリ Secret `CODEX_API_KEY` は execute job の Orchestrator step にだけ渡し、Action と deliver job には渡しません。
+
+deliver job（`contents: write` / `pull-requests: write` / `issues: write`）は report と Spec の照合、`patch_sha256`、既存 PR / branch の Reconciliation、`HEAD == base_sha`、clean tree、patch 適用、実差分の Scope（`.agent/state/**` を除外しない）、manifest、Final Verification の順で、すべて通過したときだけ Commit / Push / PR を行います。Codex は Git write を実行しません。実行中の Execution State は runner 上で ephemeral です。workflow 再実行は Task 途中から再開せず、Codex 作業は最初からやり直します。deliver は既存 PR を **同一 work unit**（`spec_id` / target branch / base branch と PR marker）と確認できたときだけ再利用します。同じ branch の PR があるだけでは再利用せず Escalate します。`.agent/state/*.json` は Resume State ではなく、MVP では Git へ commit しません。Codex / patch が `.agent/state/**` を変更した場合は Scope Violation です。
+
+## Manual setup required
+
+Phase 6 の実 GitHub 実行には人間側の設定が必要です。
+
+- **GitHub Secrets**: Repository Secret `CODEX_API_KEY`（execute の Orchestrator step のみ）
+- **Actions permissions**: workflow は default `contents: read`。deliver job だけ `contents: write` / `pull-requests: write` / `issues: write`
+- **Allow GitHub Actions to create and approve pull requests**: repository Settings → Actions → General → Workflow permissions で有効化しないと `GITHUB_TOKEN` は PR を作れません
+- **branch protection**: base branch の protection は維持してよい。feature branch への Orchestrator push を妨げないこと。force push は使わない
+- labels: `agent:ready` / `agent:escalated` / `agent:failed` は未作成なら Deliver が API で作成する（`issues: write`）。`agent:running` は execute に write を足さないため適用しない。`agent:review` は Phase 7
+- **Codex authentication**: `CODEX_API_KEY` のみ。deliver / Git / Validation へは渡さない
+- **optional notification target**: `agent/config.json` の `notification.mention`。未設定時にユーザー名を生成しない
 
 Codex CLI は公式 `@openai/codex@0.147.0` を pin します。本番の API 認証は Orchestrator が `CODEX_API_KEY` を Codex subprocess にだけ渡す経路です。Action の placeholder `openai-api-key` は sandbox bootstrap 用で、この認証経路ではありません。MVP ではモデルも `agent/config.json` の `codex.model`で Repository 側に明示固定し、ローカルと CI で同じ値を使います。`~/.codex` などのユーザー設定や CLI 暗黙デフォルトには依存しません。

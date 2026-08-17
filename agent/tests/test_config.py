@@ -24,6 +24,7 @@ def test_load_default_config() -> None:
     assert config.retry.review_attempt_limit == 3
     assert config.review.classifier_model is None
     assert config.notification.enabled is False
+    assert config.notification.mention is None
     assert config.coderabbit.actor == "coderabbitai[bot]"
 
 

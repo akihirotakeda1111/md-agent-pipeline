@@ -85,6 +85,8 @@ def collect_changes(repo_root: Path | str, base_sha: str) -> tuple[GitChange, ..
     """Collect tracked diffs vs BASE_SHA plus untracked files.
 
     ``git diff --name-only`` alone is not enough: untracked files are included.
+    Gitignored ``.agent/state/**`` is included so Codex leaks are not dropped
+    from the patch or from deliver Scope Enforcement.
     """
     by_path: dict[str, GitChange] = {}
     for change in _parse_name_status(
@@ -110,7 +112,56 @@ def collect_changes(repo_root: Path | str, base_sha: str) -> tuple[GitChange, ..
         path = normalize_git_path(raw)
         if path:
             by_path[path] = GitChange(path=path, status="untracked")
+    ignored = require_git_ok(
+        run_git(repo_root, "ls-files", "--others", "--ignored", "--exclude-standard"),
+        "ls-files",
+        "--ignored",
+    )
+    for raw in ignored.splitlines():
+        path = normalize_git_path(raw)
+        if path and _is_orchestrator_state_path(path) and path not in by_path:
+            by_path[path] = GitChange(path=path, status="untracked")
     return tuple(by_path.values())
+
+
+def change_path_list(changes: tuple[GitChange, ...] | list[GitChange]) -> tuple[str, ...]:
+    seen: list[str] = []
+    for change in changes:
+        for path in change.paths:
+            if path not in seen:
+                seen.append(path)
+    return tuple(seen)
+
+
+def assert_clean_for_delivery(repo_root: Path | str) -> None:
+    """Fail closed if the worktree, index, or ignored state files are dirty."""
+    porcelain = require_git_ok(
+        run_git(repo_root, "status", "--porcelain=v1", "-uall"),
+        "status",
+    )
+    cached = require_git_ok(
+        run_git(repo_root, "diff", "--cached", "--name-only"),
+        "diff",
+        "--cached",
+    )
+    ignored = require_git_ok(
+        run_git(repo_root, "ls-files", "--others", "--ignored", "--exclude-standard"),
+        "ls-files",
+        "--ignored",
+    )
+    ignored_state = [
+        normalize_git_path(raw)
+        for raw in ignored.splitlines()
+        if _is_orchestrator_state_path(normalize_git_path(raw))
+    ]
+    dirty = [line for line in porcelain.splitlines() if line.strip()]
+    staged = [line for line in cached.splitlines() if line.strip()]
+    if dirty or staged or ignored_state:
+        preview = ", ".join([*dirty[:4], *staged[:4], *ignored_state[:4]])
+        raise AgentError.policy_violation(
+            f"delivery worktree or index is not clean: {preview}",
+            code="DIRTY_WORKTREE",
+        )
 
 
 def working_tree_diff_text(repo_root: Path | str, base_sha: str, *, limit: int = 8000) -> str:

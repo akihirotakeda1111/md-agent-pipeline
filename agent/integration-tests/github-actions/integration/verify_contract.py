@@ -105,8 +105,10 @@ def collect_failures(text: str | None = None) -> list[str]:
 
     parse_job = jobs.get("parse-spec")
     execute_job = jobs.get("execute")
+    deliver_job = jobs.get("deliver")
     _require(isinstance(parse_job, dict), "parse-spec job is missing", failures)
     _require(isinstance(execute_job, dict), "execute job is missing", failures)
+    _require(isinstance(deliver_job, dict), "deliver job is missing", failures)
     if isinstance(parse_job, dict):
         _require(
             parse_job.get("name") == "Parse spec", 'parse-spec name must be "Parse spec"', failures
@@ -151,8 +153,53 @@ def collect_failures(text: str | None = None) -> list[str]:
                 failures,
             )
 
-    _require("contents: write" not in raw, "contents: write is forbidden", failures)
-    _require("pull-requests: write" not in raw, "pull-requests: write is forbidden", failures)
+    if isinstance(deliver_job, dict):
+        _require(
+            deliver_job.get("permissions", {}).get("contents") == "write",
+            "deliver permissions.contents must be write",
+            failures,
+        )
+        _require(
+            deliver_job.get("permissions", {}).get("pull-requests") == "write",
+            "deliver permissions.pull-requests must be write",
+            failures,
+        )
+        _require(
+            deliver_job.get("permissions", {}).get("issues") == "write",
+            "deliver permissions.issues must be write",
+            failures,
+        )
+        _require(
+            "CODEX_API_KEY" not in yaml.safe_dump(deliver_job),
+            "deliver must not receive CODEX_API_KEY",
+            failures,
+        )
+        _require(
+            "agent/scripts/deliver.py" in yaml.safe_dump(deliver_job),
+            "deliver must call deliver.py",
+            failures,
+        )
+        checkout = next(
+            (
+                step
+                for step in deliver_job.get("steps") or []
+                if isinstance(step, dict)
+                and str(step.get("uses", "")).startswith("actions/checkout@")
+            ),
+            None,
+        )
+        _require(isinstance(checkout, dict), "deliver must checkout", failures)
+        if isinstance(checkout, dict):
+            _require(
+                checkout.get("with", {}).get("persist-credentials") is True,
+                "deliver checkout must persist credentials for git push",
+                failures,
+            )
+
+    _require("contents: write" in raw, "deliver job must request contents: write", failures)
+    _require(
+        "pull-requests: write" in raw, "deliver job must request pull-requests: write", failures
+    )
     _require("fetch-depth: 0" in raw, "checkout must use fetch-depth: 0", failures)
     _require(
         "persist-credentials: false" in raw,
@@ -160,7 +207,9 @@ def collect_failures(text: str | None = None) -> list[str]:
         failures,
     )
     _require(
-        raw.count("actions/checkout@v7") >= 2, "both jobs must use actions/checkout@v7", failures
+        raw.count("actions/checkout@v7") >= 3,
+        "parse, execute, and deliver must use actions/checkout@v7",
+        failures,
     )
     _require('python-version: "3.11"' in raw, "setup-python must pin 3.11", failures)
     _require(
@@ -171,7 +220,9 @@ def collect_failures(text: str | None = None) -> list[str]:
         "execute must call prepare-execute.py",
         failures,
     )
-    _require("agent/scripts/run-task.py" in raw, "execute must call run-task.py", failures)
+    _require(
+        "agent/scripts/run-work-unit.py" in raw, "execute must call run-work-unit.py", failures
+    )
     _require("[skip ci]" not in raw.lower(), "workflow must not depend on [skip ci]", failures)
     _require(
         raw.count("CODEX_API_KEY:") == 1,
@@ -206,8 +257,9 @@ def collect_failures(text: str | None = None) -> list[str]:
             install_cli_i = _step_index(steps, lambda step: _run_contains(step, "npm install -g"))
             bootstrap_i = _step_index(steps, lambda step: _uses(step, "openai/codex-action@"))
             run_i = _step_index(
-                steps, lambda step: _run_contains(step, "agent/scripts/run-task.py")
+                steps, lambda step: _run_contains(step, "agent/scripts/run-work-unit.py")
             )
+            upload_i = _step_index(steps, lambda step: _uses(step, "actions/upload-artifact@"))
             _require(checkout_i >= 0, "execute must checkout first", failures)
             _require(
                 checkout_i
@@ -216,9 +268,10 @@ def collect_failures(text: str | None = None) -> list[str]:
                 < node_i
                 < install_cli_i
                 < bootstrap_i
-                < run_i,
+                < run_i
+                < upload_i,
                 "execute setup must be checkout, toolchain, installs, "
-                "Codex bootstrap, orchestrator",
+                "Codex bootstrap, orchestrator, artifact upload",
                 failures,
             )
             _require(
@@ -227,8 +280,8 @@ def collect_failures(text: str | None = None) -> list[str]:
                 failures,
             )
             _require(
-                run_i == len(steps) - 1,
-                "run-task.py must be the last execute step",
+                upload_i == len(steps) - 1,
+                "upload-artifact must be the last execute step",
                 failures,
             )
             for step in steps[bootstrap_i + 1 :]:
@@ -303,7 +356,7 @@ def main() -> int:
         for failure in failures:
             print(f"FAIL: {failure}", file=sys.stderr)
         return 1
-    print(f"Phase 5 production workflow contract: PASS ({WORKFLOW.as_posix()})")
+    print(f"Phase 6 production workflow contract: PASS ({WORKFLOW.as_posix()})")
     return 0
 
 

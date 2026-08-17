@@ -29,7 +29,8 @@
   },
   "notification": {
     "enabled": false,
-    "channel": null
+    "channel": null,
+    "mention": null
   },
   "coderabbit": {
     "actor": "coderabbitai[bot]"

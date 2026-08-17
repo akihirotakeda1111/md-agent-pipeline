@@ -42,7 +42,6 @@ TERMINAL_STATUSES = frozenset(
         ExecutionStatus.COMPLETED,
         ExecutionStatus.INVALID_SPEC,
         ExecutionStatus.SCOPE_VIOLATION,
-        ExecutionStatus.FAILED,
         ExecutionStatus.ESCALATED,
     }
 )
@@ -110,7 +109,7 @@ ALLOWED_TRANSITIONS: dict[ExecutionStatus, frozenset[ExecutionStatus]] = {
     ExecutionStatus.COMPLETED: frozenset(),
     ExecutionStatus.INVALID_SPEC: frozenset(),
     ExecutionStatus.SCOPE_VIOLATION: frozenset(),
-    ExecutionStatus.FAILED: frozenset(),
+    ExecutionStatus.FAILED: frozenset({ExecutionStatus.RUNNING}),
     ExecutionStatus.ESCALATED: frozenset(),
 }
 

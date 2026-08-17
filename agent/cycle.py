@@ -22,6 +22,20 @@ from agent.codex_runner import (
 )
 from agent.config import AgentConfig, load_config
 from agent.errors import AgentError
+from agent.events import (
+    CODEX_COMPLETED,
+    CODEX_STARTED,
+    FINAL_VALIDATION_STARTED,
+    REPAIR_STARTED,
+    SCOPE_CHECK_PASSED,
+    SCOPE_CHECK_STARTED,
+    SCOPE_VIOLATION,
+    TASK_STARTED,
+    VALIDATION_FAILED,
+    VALIDATION_PASSED,
+    VALIDATION_STARTED,
+    emit,
+)
 from agent.gitutil import (
     assert_clean_worktree,
     capture_snapshot,
@@ -142,6 +156,20 @@ def run_task_cycle(
     if persist_state:
         persist(root, current, cfg)
 
+    emit(
+        TASK_STARTED,
+        f"starting {selected.id}",
+        task_id=parsed.id,
+        state=current.state.value,
+        extra={"spec_task": selected.id},
+    )
+    emit(
+        CODEX_STARTED,
+        "codex implementation started",
+        task_id=parsed.id,
+        state=current.state.value,
+        extra={"spec_task": selected.id},
+    )
     implement = run_codex(
         parsed,
         selected,
@@ -151,6 +179,13 @@ def run_task_cycle(
         executor=executor,
         stage="implementation",
         attempt=0,
+    )
+    emit(
+        CODEX_COMPLETED,
+        "codex implementation completed",
+        task_id=parsed.id,
+        state=current.state.value,
+        extra={"spec_task": selected.id, "exit_code": implement.exit_code},
     )
     return _after_codex(
         parsed,
@@ -191,6 +226,12 @@ def _final_verify_if_ready(
             state=current,
             message="no selectable task",
         )
+    emit(
+        FINAL_VALIDATION_STARTED,
+        "final verification started",
+        task_id=spec.id,
+        state=current.state.value,
+    )
     records = run_final_verification(spec, repo_root=root, config=cfg, env=env)
     failed = next((record for record in records if not record.passed), None)
     if failed is None:
@@ -203,7 +244,7 @@ def _final_verify_if_ready(
             base_sha=None,
             state=current,
             validations=records,
-            message="final verification passed; PR is not created in this phase",
+            message="final verification passed",
         )
     classification = classify_validation(failed)
     target = (
@@ -266,11 +307,25 @@ def _after_codex(
     stage: str,
     attempt: int,
 ) -> CycleResult:
+    emit(
+        SCOPE_CHECK_STARTED,
+        "scope check started",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id},
+    )
     changes = collect_changes(root, base_sha)
     state_rel = Path(cfg.state.directory).as_posix() + f"/{spec.id}.json"
     changes = tuple(change for change in changes if state_rel not in change.paths)
     scope = check_scope(spec, changes)
     if not scope.allowed:
+        emit(
+            SCOPE_VIOLATION,
+            f"SCOPE_VIOLATION: {', '.join(scope.violation_paths)}",
+            task_id=spec.id,
+            state=ExecutionStatus.SCOPE_VIOLATION.value,
+            extra={"spec_task": task.id},
+        )
         state = apply_transition(
             state,
             ExecutionStatus.SCOPE_VIOLATION,
@@ -318,6 +373,13 @@ def _after_codex(
             message="codex exited non-zero without in-scope changes",
         )
 
+    emit(
+        SCOPE_CHECK_PASSED,
+        "scope check passed",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id},
+    )
     state = apply_transition(state, ExecutionStatus.VALIDATING, current_task=task.id)
     if persist_state:
         persist(root, state, cfg)
@@ -379,6 +441,13 @@ def _validate_and_maybe_repair(
     stage: str,
     attempt: int,
 ) -> CycleResult:
+    emit(
+        VALIDATION_STARTED,
+        "validation started",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id},
+    )
     records = run_validation_text(
         task.validation,
         repo_root=root,
@@ -401,6 +470,13 @@ def _validate_and_maybe_repair(
         )
         if persist_state:
             persist(root, state, cfg)
+        emit(
+            VALIDATION_PASSED,
+            "validation passed",
+            task_id=spec.id,
+            state=state.state.value,
+            extra={"spec_task": task.id},
+        )
         return CycleResult(
             outcome="TASK_COMPLETED",
             spec_id=spec.id,
@@ -419,6 +495,13 @@ def _validate_and_maybe_repair(
         stage=stage,
         attempt=attempt,
         api_key=api_key,
+    )
+    emit(
+        VALIDATION_FAILED,
+        failed.command,
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id},
     )
     classification = classify_validation(failed)
     if classification is FailureClass.ENVIRONMENT_FAILURE:
@@ -501,12 +584,26 @@ def _validate_and_maybe_repair(
     )
     if persist_state:
         persist(root, state, cfg)
+    emit(
+        REPAIR_STARTED,
+        "bounded repair started",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id, "attempt": state.repair_attempts},
+    )
     prompt = build_repair_prompt(
         spec,
         task,
         repo_root=root,
         failed=failed,
         diff_text=working_tree_diff_text(root, base_sha),
+    )
+    emit(
+        CODEX_STARTED,
+        "codex repair started",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id, "attempt": state.repair_attempts},
     )
     repair_run = run_codex(
         spec,
@@ -518,6 +615,13 @@ def _validate_and_maybe_repair(
         prompt=prompt,
         stage="repair",
         attempt=state.repair_attempts,
+    )
+    emit(
+        CODEX_COMPLETED,
+        "codex repair completed",
+        task_id=spec.id,
+        state=state.state.value,
+        extra={"spec_task": task.id, "exit_code": repair_run.exit_code},
     )
     return _after_codex(
         spec,

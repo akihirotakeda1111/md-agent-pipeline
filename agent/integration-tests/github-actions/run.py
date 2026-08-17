@@ -222,6 +222,7 @@ def assert_watched_run(
         expected_conclusion=str(case["expected_conclusion"]),
         expected_parse=str(case["parse_job"]),
         expected_execute=str(case["execute_job"]),
+        expected_deliver=case.get("deliver_job"),
         expected_event=str(case["event"]),
         conclusion=data.get("conclusion"),
         jobs=list(data.get("jobs") or []),

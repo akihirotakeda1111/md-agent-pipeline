@@ -82,9 +82,16 @@ def test_invalid_transition_is_rejected() -> None:
     assert "PENDING -> COMPLETED" in str(exc_info.value)
 
 
-def test_terminal_state_has_no_outbound() -> None:
+def test_failed_can_retry() -> None:
     spec = parse_spec(EXAMPLE_SPEC)
     failed = replace(new_execution_state(spec), state=ExecutionStatus.FAILED)
+    running = apply_transition(failed, ExecutionStatus.RUNNING)
+    assert running.state is ExecutionStatus.RUNNING
+
+
+def test_terminal_state_has_no_outbound() -> None:
+    spec = parse_spec(EXAMPLE_SPEC)
+    failed = replace(new_execution_state(spec), state=ExecutionStatus.ESCALATED)
     with pytest.raises(AgentError) as exc_info:
         apply_transition(failed, ExecutionStatus.RUNNING)
     assert exc_info.value.code == "INVALID_TRANSITION"

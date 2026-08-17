@@ -11,7 +11,7 @@ B. Real Push Integration
    → ephemeral branch へ spec を push
    → production jobs
    → 01 の execute は openai/codex-action の sandbox bootstrap のあと
-     production Orchestrator（run-task.py）
+     production Orchestrator（run-work-unit.py → deliver.py）
 
 C. Real workflow_dispatch Integration
    04 dispatch-skip
@@ -68,12 +68,12 @@ JSON の各ケースは `status`（PASS/FAIL）、job conclusion、`run_id`、UR
 
 | Case | Trigger | Spec | Codex | 期待 |
 |---|---|---|---|---|
-| `01-normal-success` | push | 正当 spec、`base_branch` = ephemeral branch | Real Codex | workflow success、Parse spec success、Execute task success |
-| `02-invalid-spec` | push | 不正 spec | なし | workflow failure、Parse spec failure、Execute task skipped |
-| `03-feature-branch-skip` | push | 正当 spec、`base_branch` = default branch ≠ branch | なし | workflow success、Parse spec success、Execute task skipped |
-| `04-dispatch-skip` | workflow_dispatch `--ref` ephemeral | 専用 fixture を `specs/tasks/_it-*.md` に載せる。`base_branch` = default branch ≠ branch | なし | event=workflow_dispatch、Parse spec success、Execute task skipped |
+| `01-normal-success` | push | 正当 spec、`base_branch` = ephemeral branch | Real Codex | workflow success、Parse spec / Execute task / Deliver が success |
+| `02-invalid-spec` | push | 不正 spec | なし | workflow failure、Parse spec failure、Execute / Deliver skipped |
+| `03-feature-branch-skip` | push | 正当 spec、`base_branch` = default branch ≠ branch | なし | workflow success、Parse spec success、Execute / Deliver skipped |
+| `04-dispatch-skip` | workflow_dispatch `--ref` ephemeral | 専用 fixture を `specs/tasks/_it-*.md` に載せる。`base_branch` = default branch ≠ branch | なし | event=workflow_dispatch、Parse spec success、Execute / Deliver skipped |
 
-01 だけ execute job が始まります。本番 YAML では `openai/codex-action` が prompt なしの sandbox bootstrap を先に走り、そのあと `run-task.py` が Real Codex を起動します。Action は Orchestrator の代替ではありません。bootstrap が失敗すれば execute は Orchestrator まで到達せず FAIL します。01 だけリポジトリ Secret `CODEX_API_KEY` が必要です。API コストと非決定性があります。合格条件は job conclusion であり、runner 上のファイル内容は見ていません（本番 workflow は artifact を上げません）。
+01 だけ execute job が始まります。本番 YAML では `openai/codex-action` が prompt なしの sandbox bootstrap を先に走り、そのあと `run-work-unit.py` が Real Codex を起動します。Action は Orchestrator の代替ではありません。bootstrap が失敗すれば execute は Orchestrator まで到達せず FAIL します。01 だけリポジトリ Secret `CODEX_API_KEY` が必要です。deliver job は write token で Commit / PR します。Settings で GitHub Actions の PR 作成を許可してください。
 
 02–04 は execute が始まらないため Secret なしで回せます。bootstrap も走りません。04 の `--ref` に default branch を渡してはいけません。正当 spec だと Real Codex が起動します。
 
@@ -105,5 +105,5 @@ github-actions/
 - dispatch-normal（execute は 01 で証明）
 - dispatch-invalid（parse 失敗は 02 で証明）
 - Commit / Push / Pull Request
-- Resume / Reconciliation
+- Restart / GitHub Reconciliation
 - CodeRabbit

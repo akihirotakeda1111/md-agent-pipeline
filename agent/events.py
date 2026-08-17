@@ -1,0 +1,51 @@
+"""Structured observability event names for Phase 6."""
+
+from __future__ import annotations
+
+from typing import Any, TextIO
+
+from agent.logger import log_event
+
+SPEC_DISCOVERED = "SPEC_DISCOVERED"
+SPEC_VALIDATED = "SPEC_VALIDATED"
+STATE_INITIALIZED = "STATE_INITIALIZED"
+TASK_STARTED = "TASK_STARTED"
+CODEX_STARTED = "CODEX_STARTED"
+CODEX_COMPLETED = "CODEX_COMPLETED"
+SCOPE_CHECK_STARTED = "SCOPE_CHECK_STARTED"
+SCOPE_CHECK_PASSED = "SCOPE_CHECK_PASSED"
+SCOPE_VIOLATION = "SCOPE_VIOLATION"
+VALIDATION_STARTED = "VALIDATION_STARTED"
+VALIDATION_PASSED = "VALIDATION_PASSED"
+VALIDATION_FAILED = "VALIDATION_FAILED"
+REPAIR_STARTED = "REPAIR_STARTED"
+TASK_COMPLETED = "TASK_COMPLETED"
+FINAL_VALIDATION_STARTED = "FINAL_VALIDATION_STARTED"
+FINAL_VALIDATION_PASSED = "FINAL_VALIDATION_PASSED"
+PR_CREATED = "PR_CREATED"
+DELIVERY_VALIDATION_STARTED = "DELIVERY_VALIDATION_STARTED"
+DELIVERY_VALIDATION_PASSED = "DELIVERY_VALIDATION_PASSED"
+ESCALATED = "ESCALATED"
+FAILED = "FAILED"
+WORKFLOW_COMPLETED = "WORKFLOW_COMPLETED"
+
+
+def emit(
+    event: str,
+    message: str,
+    *,
+    task_id: str | None = None,
+    phase: str | None = "git-pr",
+    state: str | None = None,
+    stream: TextIO | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return log_event(
+        event,
+        message,
+        task_id=task_id,
+        phase=phase,
+        state=state,
+        stream=stream,
+        extra=extra,
+    )

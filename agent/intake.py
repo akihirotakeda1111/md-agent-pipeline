@@ -15,7 +15,18 @@ from agent.spec import TaskSpec, parse_spec
 from agent.state import ExecutionStatus, read_state, state_file_path
 
 NULL_SHA = "0" * 40
-STARTABLE_STATUSES = frozenset({ExecutionStatus.PENDING, ExecutionStatus.TASK_COMPLETED})
+STARTABLE_STATUSES = frozenset(
+    {
+        ExecutionStatus.PENDING,
+        ExecutionStatus.TASK_COMPLETED,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.PR_CREATED,
+        ExecutionStatus.FINAL_VALIDATING,
+        ExecutionStatus.RUNNING,
+        ExecutionStatus.IMPLEMENTING,
+        ExecutionStatus.VALIDATING,
+    }
+)
 IN_FLIGHT_STATUSES = frozenset(
     {
         ExecutionStatus.RUNNING,

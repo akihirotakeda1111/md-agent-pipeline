@@ -9,6 +9,7 @@
       "expected_conclusion": "success",
       "parse_job": "success",
       "execute_job": "success",
+      "deliver_job": "success",
       "event": "push"
     },
     {
@@ -19,6 +20,7 @@
       "expected_conclusion": "failure",
       "parse_job": "failure",
       "execute_job": "skipped",
+      "deliver_job": "skipped",
       "event": "push"
     },
     {
@@ -29,6 +31,7 @@
       "expected_conclusion": "success",
       "parse_job": "success",
       "execute_job": "skipped",
+      "deliver_job": "skipped",
       "event": "push"
     },
     {
@@ -39,6 +42,7 @@
       "expected_conclusion": "success",
       "parse_job": "success",
       "execute_job": "skipped",
+      "deliver_job": "skipped",
       "event": "workflow_dispatch"
     }
   ]
