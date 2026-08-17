@@ -86,6 +86,20 @@ Real Codex Smoke Testには、公式Codex CLIのインストールと認証が�
 python agent/integration-tests/scope-validation-repair/run.py
 ```
 
+### Phase 5 — GitHub Actions
+
+Contract 検査は本番 `.github/workflows/agent-execute.yml` をローカルで読みます。GitHub は不要です。
+
+```bash
+python agent/integration-tests/github-actions/integration/verify_contract.py
+```
+
+実 GitHub 結合は本番 `agent-execute.yml` を push / `workflow_dispatch` します。`01-normal-success` だけ Real Codex（Secret `CODEX_API_KEY`）を使います。`gh` には **Contents: write** と **Actions: read/write** が必要です。
+
+```bash
+python agent/integration-tests/github-actions/run.py --repo OWNER/REPO
+```
+
 ## Spec / state CLIs
 
 ```text

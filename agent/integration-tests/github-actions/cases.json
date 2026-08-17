@@ -1,0 +1,45 @@
+{
+  "workflow": "agent-execute.yml",
+  "cases": [
+    {
+      "id": "01-normal-success",
+      "trigger": "push",
+      "fixture": "01-normal-success.PASS.md",
+      "base_branch_mode": "self",
+      "expected_conclusion": "success",
+      "parse_job": "success",
+      "execute_job": "success",
+      "event": "push"
+    },
+    {
+      "id": "02-invalid-spec",
+      "trigger": "push",
+      "fixture": "02-invalid-spec.INVALID_SPEC.md",
+      "base_branch_mode": "default",
+      "expected_conclusion": "failure",
+      "parse_job": "failure",
+      "execute_job": "skipped",
+      "event": "push"
+    },
+    {
+      "id": "03-feature-branch-skip",
+      "trigger": "push",
+      "fixture": "03-feature-branch-skip.SKIP.md",
+      "base_branch_mode": "default",
+      "expected_conclusion": "success",
+      "parse_job": "success",
+      "execute_job": "skipped",
+      "event": "push"
+    },
+    {
+      "id": "04-dispatch-skip",
+      "trigger": "workflow_dispatch",
+      "fixture": "04-dispatch-skip.SKIP.md",
+      "base_branch_mode": "default",
+      "expected_conclusion": "success",
+      "parse_job": "success",
+      "execute_job": "skipped",
+      "event": "workflow_dispatch"
+    }
+  ]
+}
