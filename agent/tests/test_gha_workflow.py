@@ -99,6 +99,41 @@ def test_codex_secret_is_not_globally_exposed() -> None:
     assert secret_steps[0]["env"]["GITHUB_TOKEN"] == ""
     setup_dump = yaml.safe_dump([step for step in execute["steps"] if step is not secret_steps[0]])
     assert "CODEX_API_KEY" not in setup_dump
+    bootstrap = next(
+        step
+        for step in execute["steps"]
+        if str(step.get("uses", "")).startswith("openai/codex-action@")
+    )
+    assert "CODEX_API_KEY" not in yaml.safe_dump(bootstrap)
+    assert bootstrap["with"]["openai-api-key"] == "unused-bootstrap-placeholder"
+
+
+def test_codex_action_bootstraps_sandbox_without_replacing_orchestrator() -> None:
+    payload, _ = _load()
+    steps = payload["jobs"]["execute"]["steps"]
+    names_or_uses = [(step.get("name"), step.get("uses"), step.get("run", "")) for step in steps]
+    uses = [step.get("uses") for step in steps]
+    assert "openai/codex-action@v1" in uses
+    bootstrap = next(step for step in steps if step.get("uses") == "openai/codex-action@v1")
+    inputs = bootstrap["with"]
+    assert inputs["sandbox"] == "workspace-write"
+    assert inputs["safety-strategy"] == "drop-sudo"
+    assert "prompt" not in inputs
+    assert "prompt-file" not in inputs
+    assert "permission-profile" not in inputs
+    assert "danger-full-access" not in yaml.safe_dump(bootstrap)
+    assert inputs["openai-api-key"] == "unused-bootstrap-placeholder"
+    assert "secrets." not in str(inputs["openai-api-key"])
+    run_task = next(step for step in steps if "run-task.py" in str(step.get("run", "")))
+    assert steps.index(bootstrap) < steps.index(run_task)
+    assert steps[-1] is run_task
+    assert "sudo" not in yaml.safe_dump(run_task)
+    assert any("actions/setup-python@" in str(item) for item in uses)
+    assert any("actions/setup-node@" in str(item) for item in uses)
+    assert any("npm install -g" in run for _, _, run in names_or_uses)
+    jobs_text = yaml.safe_dump(payload["jobs"])
+    assert "self-hosted" not in jobs_text
+    assert "danger-full-access" not in jobs_text
 
 
 def test_feature_branch_push_is_not_unconditional_intake() -> None:

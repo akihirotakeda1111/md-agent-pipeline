@@ -14,6 +14,23 @@
 # - Official default pending queue is one run (queue: single). queue: max is not used.
 # - Do not re-push the same task_id until the in-progress execute job finishes.
 #
+# Codex sandbox bootstrap (execute job):
+# - openai/codex-action is environment prep only. It must not replace
+#   run-task.py / run_task_cycle() / Codex CLI.
+# - Omit prompt and prompt-file so the action does not run Codex.
+# - Official GitHub-hosted Linux bootstrap enables unprivileged user
+#   namespaces and clears AppArmor's userns gate so later
+#   `codex exec --sandbox workspace-write` is not blocked by
+#   `bwrap: loopback: Failed RTM_NEWADDR`. See openai/codex-action README
+#   (GitHub-hosted Linux runners) and issue #75 / PR #77.
+# - danger-full-access is forbidden. Keep workspace-write.
+# - drop-sudo is irreversible for the rest of the job: do all toolchain
+#   and install steps before the action; do not use sudo after it.
+# - Do not pass the repository Codex API secret into the action. Production auth
+#   stays CODEX_API_KEY on the Orchestrator step / Codex subprocess.
+#   A non-empty placeholder is required so the action still runs the
+#   Linux sandbox bootstrap (and the unused Responses API proxy).
+#
 # Official references used while writing this file:
 # - https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows
 # - https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
@@ -21,6 +38,7 @@
 # - https://github.com/actions/checkout (persist-credentials, fetch-depth)
 # - https://github.com/actions/setup-python
 # - https://github.com/actions/setup-node
+# - https://github.com/openai/codex-action
 
 name: Agent Execute
 
@@ -110,9 +128,20 @@ jobs:
           node-version: "20"
 
       - name: Install pinned Codex CLI
+        id: codex-cli
         run: |
           PKG=$(python -c "from agent.config import load_config; c=load_config(); print(f'{c.codex.package}@{c.codex.version}')")
+          VER=$(python -c "from agent.config import load_config; print(load_config().codex.version)")
           npm install -g "$PKG"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap Codex sandbox
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: unused-bootstrap-placeholder
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-version: ${{ steps.codex-cli.outputs.version }}
 
       - name: Run orchestrator
         env:
