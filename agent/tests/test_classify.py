@@ -47,7 +47,7 @@ def test_file_not_found_error_is_repairable_not_environment() -> None:
     stderr = (
         "Traceback (most recent call last):\n"
         '  File "<string>", line 1, in <module>\n'
-        "  File \"/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/pathlib.py\", "
+        '  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/pathlib.py", '
         "line 1058, in read_text\n"
         "FileNotFoundError: [Errno 2] No such file or directory: 'app/result.txt'\n"
     )

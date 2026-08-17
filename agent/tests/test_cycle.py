@@ -309,8 +309,7 @@ def test_cycle_repairs_file_not_found_after_codex_noop(
 ) -> None:
     repo, spec_path = _init_repo(tmp_path, limit=1)
     (repo / "check_app.py").write_text(
-        "from pathlib import Path\n"
-        "print(Path('src/app.py').read_text(encoding='utf-8'))\n",
+        "from pathlib import Path\nprint(Path('src/app.py').read_text(encoding='utf-8'))\n",
         encoding="utf-8",
     )
     _git(repo, "add", "check_app.py")

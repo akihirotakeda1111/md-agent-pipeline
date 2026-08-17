@@ -196,18 +196,29 @@ def collect_failures(text: str | None = None) -> list[str]:
         if isinstance(steps, list) and steps:
             checkout_i = _step_index(steps, lambda step: _uses(step, "actions/checkout@"))
             python_i = _step_index(steps, lambda step: _uses(step, "actions/setup-python@"))
-            install_orch_i = _step_index(steps, lambda step: _run_contains(step, "pip install -e ."))
+            install_orch_i = _step_index(
+                steps, lambda step: _run_contains(step, "pip install -e .")
+            )
             prepare_i = _step_index(
                 steps, lambda step: _run_contains(step, "agent/scripts/prepare-execute.py")
             )
             node_i = _step_index(steps, lambda step: _uses(step, "actions/setup-node@"))
             install_cli_i = _step_index(steps, lambda step: _run_contains(step, "npm install -g"))
             bootstrap_i = _step_index(steps, lambda step: _uses(step, "openai/codex-action@"))
-            run_i = _step_index(steps, lambda step: _run_contains(step, "agent/scripts/run-task.py"))
+            run_i = _step_index(
+                steps, lambda step: _run_contains(step, "agent/scripts/run-task.py")
+            )
             _require(checkout_i >= 0, "execute must checkout first", failures)
             _require(
-                checkout_i < python_i < install_orch_i < node_i < install_cli_i < bootstrap_i < run_i,
-                "execute setup must be checkout, toolchain, installs, Codex bootstrap, orchestrator",
+                checkout_i
+                < python_i
+                < install_orch_i
+                < node_i
+                < install_cli_i
+                < bootstrap_i
+                < run_i,
+                "execute setup must be checkout, toolchain, installs, "
+                "Codex bootstrap, orchestrator",
                 failures,
             )
             _require(
