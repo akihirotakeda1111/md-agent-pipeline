@@ -45,8 +45,19 @@ Coding backendはOpenAI公式Codex CLI。
 - 第三者の同名 `codex-cli` package
 - 存在確認していないinstall command
 
-GitHub Actions上で公式 `openai/codex-action` をtransportとして使う場合でも、
-coding engineが公式Codex CLIである責務境界を維持すること。
+GitHub Actions上では、公式 `openai/codex-action` を
+Codex CLIのsandboxおよび実行環境を準備するbootstrap用途にのみ使用する。
+
+`openai/codex-action` にTask Promptを渡して、
+Action自身に実装・修正を実行させてはいけない。
+
+RuntimeのCoding Engineは引き続きOrchestrator配下のCodex CLIとする。
+
+```text
+run-task.py
+  -> run_task_cycle()
+    -> Codex Runner
+      -> codex exec
 
 ---
 

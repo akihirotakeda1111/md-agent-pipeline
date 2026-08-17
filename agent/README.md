@@ -71,7 +71,8 @@ codex exec --sandbox workspace-write --output-last-message <file> --json --ignor
 ```
 
 - 認証は subprocess にだけ `CODEX_API_KEY` を渡す
-- `GITHUB_TOKEN` / `OPENAI_API_KEY` は渡さない
+- Codex subprocess の env には `GITHUB_TOKEN` / `OPENAI_API_KEY` を渡さない
+- GitHub Actions の `openai/codex-action` 入力 `openai-api-key` は上記の env とは別物。sandbox bootstrap 用の placeholder であり、`OPENAI_API_KEY` を Codex へ渡すことではない
 - `--full-auto` は deprecated のため使わない
 - Git commit / push / PR / state update は行わない
 
@@ -91,4 +92,4 @@ Codex 実行前に uncommitted change がある場合、agent 由来差分と区
 
 ## GitHub Actions
 
-`.github/workflows/agent-execute.yml` は parse-spec job のあと、`should_execute == true` のときだけ execute job を開始します。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec（parse 失敗、複数 Spec、path 不正）は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は `valid=true` / `should_execute=false` で SUCCESS し、execute を skip します。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。checkout は `actions/checkout@v7` で `fetch-depth: 0` と `persist-credentials: false` です。permissions は `contents: read` のみです。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-task.py` です。Action は Orchestrator を代替せず、`CODEX_API_KEY` も受け取りません。sandbox は `workspace-write` のままです。
+`.github/workflows/agent-execute.yml` は parse-spec job のあと、`should_execute == true` のときだけ execute job を開始します。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec（parse 失敗、複数 Spec、path 不正）は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は `valid=true` / `should_execute=false` で SUCCESS し、execute を skip します。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。checkout は `actions/checkout@v7` で `fetch-depth: 0` と `persist-credentials: false` です。permissions は `contents: read` のみです。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-task.py` です。Action は Orchestrator を代替せず、`CODEX_API_KEY` も受け取りません。公式 Action が Linux sandbox bootstrap を走らせるには `openai-api-key` が空だとスキップされるため、secret ではない placeholder `unused-bootstrap-placeholder` を渡します。この入力で Responses API proxy も起きますが、本番認証には使いません。sandbox は `workspace-write` のままです。
