@@ -147,6 +147,8 @@ def run_task_cycle(
         config=cfg,
         env=attach_codex_api_key(rest_env, api_key, api_key_env=cfg.codex.api_key_env),
         executor=executor,
+        stage="implementation",
+        attempt=0,
     )
     return _after_codex(
         parsed,
@@ -470,6 +472,8 @@ def _validate_and_maybe_repair(
         env=attach_codex_api_key(env, api_key, api_key_env=cfg.codex.api_key_env),
         executor=executor,
         prompt=prompt,
+        stage="repair",
+        attempt=state.repair_attempts,
     )
     return _after_codex(
         spec,

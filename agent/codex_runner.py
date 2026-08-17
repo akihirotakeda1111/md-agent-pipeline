@@ -26,14 +26,17 @@ Execution State, or run validation/repair loops.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from agent.config import AgentConfig, CodexConfig, load_config
 from agent.errors import AgentError
@@ -82,6 +85,25 @@ DENIED_ENV_ALWAYS = frozenset(
 
 _SECRET_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL")
 
+DIAGNOSTIC_STAGES = frozenset({"implementation", "repair"})
+DIAGNOSTIC_MAX_CHARS = 4096
+DIAGNOSTIC_MAX_LINES = 40
+_ERROR_EVENT_TYPES = frozenset(
+    {
+        "error",
+        "turn.failed",
+        "item.failed",
+        "thread.failed",
+    }
+)
+_SECRET_ASSIGN = re.compile(
+    r"(?P<prefix>\b(?:CODEX_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN|GITHUB_PAT)"
+    r"[ \t]*[=:][ \t]*)(?P<value>[^\s\"']+)",
+    re.IGNORECASE,
+)
+_SK_TOKEN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}")
+_GITHUB_TOKEN_VALUE = re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+")
+
 Executor = Callable[..., "ProcessResult"]
 
 
@@ -99,15 +121,19 @@ class CodexRunResult:
     stderr: str
     final_response: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
+    diagnostic: dict[str, Any] | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "exit_code": self.exit_code,
             "stdout": self.stdout,
             "stderr": self.stderr,
             "final_response": self.final_response,
             "metadata": self.metadata,
         }
+        if self.diagnostic is not None:
+            payload["diagnostic"] = self.diagnostic
+        return payload
 
 
 def load_implementation_instruction() -> str:
@@ -269,6 +295,117 @@ def redact_secrets(text: str, secrets: list[str]) -> str:
     return redacted
 
 
+def bound_diagnostic_text(text: str) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if len(lines) > DIAGNOSTIC_MAX_LINES:
+        lines = lines[-DIAGNOSTIC_MAX_LINES:]
+    joined = "\n".join(lines).strip()
+    if len(joined) > DIAGNOSTIC_MAX_CHARS:
+        joined = joined[-DIAGNOSTIC_MAX_CHARS:]
+    return joined
+
+
+def sanitize_diagnostic_text(text: str, secrets: list[str]) -> str:
+    redacted = redact_secrets(text, secrets)
+    redacted = _SECRET_ASSIGN.sub(lambda match: f"{match.group('prefix')}[REDACTED]", redacted)
+    redacted = _SK_TOKEN.sub("[REDACTED]", redacted)
+    redacted = _GITHUB_TOKEN_VALUE.sub("[REDACTED]", redacted)
+    return bound_diagnostic_text(redacted)
+
+
+def _text_from_error_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, dict):
+        for key in ("message", "error", "reason", "detail"):
+            inner = _text_from_error_value(value.get(key))
+            if inner:
+                return inner
+    return None
+
+
+def error_text_from_jsonl_event(event: dict[str, Any]) -> str | None:
+    type_name = str(event.get("type") or event.get("event") or "").strip().lower()
+    typed_error = (
+        type_name in _ERROR_EVENT_TYPES
+        or type_name.endswith(".error")
+        or type_name.endswith(".failed")
+    )
+    extracted = _text_from_error_value(event.get("error"))
+    if extracted is None and typed_error:
+        extracted = _text_from_error_value(event.get("message"))
+    if extracted:
+        return extracted
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        return error_text_from_jsonl_event(payload)
+    return None
+
+
+def extract_jsonl_error(text: str) -> str | None:
+    last: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            message = error_text_from_jsonl_event(parsed)
+            if message:
+                last = message
+    return last
+
+
+def extract_codex_error_diagnostic(stdout: str, stderr: str) -> tuple[str | None, str]:
+    jsonl_error = extract_jsonl_error(stdout) or extract_jsonl_error(stderr)
+    if jsonl_error:
+        return "jsonl", jsonl_error
+    fallback = stderr.strip()
+    return ("stderr" if fallback else None, fallback)
+
+
+def resolve_diagnostic_stage(stage: str) -> str:
+    return stage if stage in DIAGNOSTIC_STAGES else "implementation"
+
+
+def build_codex_diagnostic(
+    *,
+    exit_code: int,
+    duration_ms: int,
+    stage: str,
+    attempt: int,
+    api_key_env_present: bool,
+    stdout: str,
+    stderr: str,
+    secrets: list[str],
+) -> dict[str, Any]:
+    source, raw_error = extract_codex_error_diagnostic(stdout, stderr)
+    return {
+        "event": "codex.diagnostic",
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "stage": resolve_diagnostic_stage(stage),
+        "attempt": max(0, attempt),
+        "api_key_env_present": bool(api_key_env_present),
+        "error_source": source,
+        "error": sanitize_diagnostic_text(raw_error, secrets),
+    }
+
+
+def emit_codex_diagnostic(
+    diagnostic: dict[str, Any],
+    *,
+    stream: TextIO | None = None,
+) -> None:
+    output = stream or sys.stderr
+    output.write(json.dumps(diagnostic, ensure_ascii=False) + "\n")
+    output.flush()
+
+
 def run_codex(
     spec: TaskSpec,
     task: SpecTask,
@@ -278,6 +415,8 @@ def run_codex(
     env: Mapping[str, str] | None = None,
     executor: Executor | None = None,
     prompt: str | None = None,
+    stage: str = "implementation",
+    attempt: int = 0,
 ) -> CodexRunResult:
     cfg = config or load_config()
     root = Path(repo_root)
@@ -288,7 +427,9 @@ def run_codex(
         prompt if prompt is not None else build_implementation_prompt(spec, task, repo_root=root)
     )
     child_env = build_codex_env(env, api_key_env=cfg.codex.api_key_env)
-    secrets = [child_env[cfg.codex.api_key_env]] if cfg.codex.api_key_env in child_env else []
+    api_key_value = child_env.get(cfg.codex.api_key_env)
+    secrets = [api_key_value] if api_key_value else []
+    api_key_env_present = bool((api_key_value or "").strip())
 
     with tempfile.TemporaryDirectory(prefix="codex-run-") as tmp:
         last_message_path = Path(tmp) / "last-message.txt"
@@ -311,6 +452,20 @@ def run_codex(
     if final_response is not None:
         final_response = redact_secrets(final_response, secrets)
 
+    diagnostic = None
+    if process.returncode != 0:
+        diagnostic = build_codex_diagnostic(
+            exit_code=process.returncode,
+            duration_ms=elapsed_ms,
+            stage=stage,
+            attempt=attempt,
+            api_key_env_present=api_key_env_present,
+            stdout=stdout,
+            stderr=stderr,
+            secrets=secrets,
+        )
+        emit_codex_diagnostic(diagnostic)
+
     return CodexRunResult(
         exit_code=process.returncode,
         stdout=stdout,
@@ -326,8 +481,9 @@ def run_codex(
             "task_id": task.id,
             "spec_id": spec.id,
             "duration_ms": elapsed_ms,
-            "api_key_env_present": cfg.codex.api_key_env in child_env,
+            "api_key_env_present": api_key_env_present,
         },
+        diagnostic=diagnostic,
     )
 
 
