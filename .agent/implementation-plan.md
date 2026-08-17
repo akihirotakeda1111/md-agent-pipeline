@@ -114,7 +114,7 @@ Codex Repair
 - ValidationをOrchestratorが実行する
 - Repair回数をOrchestratorが制御する
 - 同一Taskの並行実行を防げる
-- GitHub Actions再実行からresumeできる
+- GitHub Actions再実行はwork unit単位で最初から行い、既存PRは同一work unitの場合のみ再利用する
 - Final Verification後だけPRを作成する
 - CodeRabbitを非同期イベントとして処理する
 - Review Classification後に決定論的Policyを通す
