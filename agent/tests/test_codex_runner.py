@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import replace
@@ -10,14 +11,18 @@ from agent.codex_runner import (
     ProcessResult,
     _default_executor,
     attach_codex_api_key,
+    bound_diagnostic_text,
     build_allowlisted_env,
     build_codex_command,
+    build_codex_diagnostic,
     build_codex_env,
     build_implementation_prompt,
     detach_codex_api_key,
+    extract_jsonl_error,
     redact_secrets,
     resolve_task,
     run_codex,
+    sanitize_diagnostic_text,
 )
 from agent.config import load_config
 from agent.errors import AgentError, ErrorCategory
@@ -155,6 +160,8 @@ def test_mock_codex_success(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
+    assert result.diagnostic is None
+    assert "diagnostic" not in result.to_json_dict()
     assert result.final_response == "implemented lease repository\n"
     assert result.metadata["version"] == "0.147.0"
     assert result.metadata["package"] == "@openai/codex"
@@ -166,7 +173,7 @@ def test_mock_codex_success(tmp_path: Path) -> None:
     assert "implementation engine" in str(captured["stdin"])
 
 
-def test_mock_codex_failure_propagates_exit_code() -> None:
+def test_mock_codex_failure_propagates_exit_code(capsys: pytest.CaptureFixture[str]) -> None:
     spec, task = _spec_and_task()
 
     def executor(command: list[str], **_kwargs: object) -> ProcessResult:
@@ -176,6 +183,90 @@ def test_mock_codex_failure_propagates_exit_code() -> None:
     assert result.exit_code == 2
     assert result.stderr == "sandbox denied"
     assert result.final_response is None
+    assert result.diagnostic is not None
+    assert result.diagnostic["event"] == "codex.diagnostic"
+    assert result.diagnostic["exit_code"] == 2
+    assert result.diagnostic["stage"] == "implementation"
+    assert result.diagnostic["attempt"] == 0
+    assert result.diagnostic["api_key_env_present"] is False
+    assert result.diagnostic["error_source"] == "stderr"
+    assert result.diagnostic["error"] == "sandbox denied"
+    emitted = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert emitted["error"] == "sandbox denied"
+
+
+def test_jsonl_error_is_preferred_over_stderr() -> None:
+    stdout = "\n".join(
+        [
+            '{"type":"item.completed","item":{"type":"agent_message"}}',
+            '{"type":"error","message":"landlock: sandbox setup failed"}',
+        ]
+    )
+    diagnostic = build_codex_diagnostic(
+        exit_code=1,
+        duration_ms=12,
+        stage="repair",
+        attempt=2,
+        api_key_env_present=True,
+        stdout=stdout,
+        stderr="ignore this stderr",
+        secrets=[],
+    )
+    assert diagnostic["stage"] == "repair"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["error_source"] == "jsonl"
+    assert diagnostic["error"] == "landlock: sandbox setup failed"
+    assert extract_jsonl_error(stdout) == "landlock: sandbox setup failed"
+
+
+def test_diagnostic_redacts_secrets_and_bounds_output() -> None:
+    secret = "codex-secret"
+    long_stderr = "\n".join(f"line-{index} {secret}" for index in range(80))
+    diagnostic = build_codex_diagnostic(
+        exit_code=1,
+        duration_ms=9,
+        stage="implementation",
+        attempt=0,
+        api_key_env_present=True,
+        stdout="",
+        stderr=long_stderr,
+        secrets=[secret],
+    )
+    assert secret not in diagnostic["error"]
+    assert diagnostic["error"].count("\n") < 80
+    assert len(diagnostic["error"]) <= 4096
+    assert "CODEX_API_KEY=[REDACTED]" in sanitize_diagnostic_text(
+        "CODEX_API_KEY=codex-secret", [secret]
+    )
+    assert bound_diagnostic_text("\n".join(str(i) for i in range(50))).count("\n") == 39
+
+
+def test_run_codex_emits_repair_diagnostic(capsys: pytest.CaptureFixture[str]) -> None:
+    spec, task = _spec_and_task()
+
+    def executor(command: list[str], **_kwargs: object) -> ProcessResult:
+        return ProcessResult(
+            1,
+            json.dumps({"type": "turn.failed", "error": {"message": "auth codex-secret"}}),
+            "",
+        )
+
+    result = run_codex(
+        spec,
+        task,
+        repo_root=REPO_ROOT,
+        env={"PATH": "/bin", "CODEX_API_KEY": "codex-secret"},
+        executor=executor,
+        stage="repair",
+        attempt=1,
+    )
+    assert result.diagnostic is not None
+    assert result.diagnostic["stage"] == "repair"
+    assert result.diagnostic["attempt"] == 1
+    assert result.diagnostic["api_key_env_present"] is True
+    assert result.diagnostic["error_source"] == "jsonl"
+    assert "codex-secret" not in result.diagnostic["error"]
+    assert "codex-secret" not in capsys.readouterr().err
 
 
 def test_timeout_is_environment_failure() -> None:
