@@ -34,6 +34,33 @@ def test_environment_classification() -> None:
     assert classify_validation(record) is FailureClass.ENVIRONMENT_FAILURE
     timeout = _record(timed_out=True, exit_code=None, stderr="validation timed out after 1s")
     assert classify_validation(timeout) is FailureClass.ENVIRONMENT_FAILURE
+    dns = classify_output(
+        stdout="",
+        stderr="Error: getaddrinfo ENOTFOUND registry.npmjs.org",
+        binary="npm",
+        exit_code=1,
+    )
+    assert dns is FailureClass.ENVIRONMENT_FAILURE
+
+
+def test_file_not_found_error_is_repairable_not_environment() -> None:
+    stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "<string>", line 1, in <module>\n'
+        "  File \"/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/pathlib.py\", "
+        "line 1058, in read_text\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: 'app/result.txt'\n"
+    )
+    record = _record(
+        command="python -c assert Path('app/result.txt')...",
+        argv=("python", "-c", "assert Path('app/result.txt').read_text() == 'PASS\\n'"),
+        stderr=stderr,
+    )
+    assert classify_validation(record) is FailureClass.AGENT_REPAIRABLE
+    assert (
+        classify_output(stdout="", stderr=stderr, binary="python", exit_code=1)
+        is FailureClass.AGENT_REPAIRABLE
+    )
 
 
 def test_escalation_classification() -> None:

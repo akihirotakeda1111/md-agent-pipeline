@@ -15,7 +15,9 @@ from agent.codex_runner import (
     CodexRunResult,
     Executor,
     attach_codex_api_key,
+    build_post_codex_diagnostic,
     detach_codex_api_key,
+    emit_codex_diagnostic,
     run_codex,
 )
 from agent.config import AgentConfig, load_config
@@ -162,6 +164,8 @@ def run_task_cycle(
         snapshot.base_sha,
         implement,
         persist_state,
+        stage="implementation",
+        attempt=0,
     )
 
 
@@ -258,6 +262,9 @@ def _after_codex(
     base_sha: str,
     implement: CodexRunResult,
     persist_state: bool,
+    *,
+    stage: str,
+    attempt: int,
 ) -> CycleResult:
     changes = collect_changes(root, base_sha)
     state_rel = Path(cfg.state.directory).as_posix() + f"/{spec.id}.json"
@@ -326,6 +333,32 @@ def _after_codex(
         base_sha,
         scope,
         persist_state,
+        implement=implement,
+        stage=stage,
+        attempt=attempt,
+    )
+
+
+def _emit_zero_exit_validation_diagnostic(
+    *,
+    implement: CodexRunResult,
+    scope: ScopeCheckResult,
+    stage: str,
+    attempt: int,
+    api_key: str | None,
+) -> None:
+    if implement.exit_code != 0:
+        return
+    secrets = [api_key] if api_key else []
+    emit_codex_diagnostic(
+        build_post_codex_diagnostic(
+            exit_code=implement.exit_code,
+            changed_paths=scope.changed_paths,
+            stage=stage,
+            attempt=attempt,
+            final_message=implement.final_response,
+            secrets=secrets,
+        )
     )
 
 
@@ -341,6 +374,10 @@ def _validate_and_maybe_repair(
     base_sha: str,
     scope: ScopeCheckResult,
     persist_state: bool,
+    *,
+    implement: CodexRunResult,
+    stage: str,
+    attempt: int,
 ) -> CycleResult:
     records = run_validation_text(
         task.validation,
@@ -376,6 +413,13 @@ def _validate_and_maybe_repair(
             message="validation passed",
         )
 
+    _emit_zero_exit_validation_diagnostic(
+        implement=implement,
+        scope=scope,
+        stage=stage,
+        attempt=attempt,
+        api_key=api_key,
+    )
     classification = classify_validation(failed)
     if classification is FailureClass.ENVIRONMENT_FAILURE:
         state = apply_transition(
@@ -487,4 +531,6 @@ def _validate_and_maybe_repair(
         base_sha,
         repair_run,
         persist_state,
+        stage="repair",
+        attempt=state.repair_attempts,
     )

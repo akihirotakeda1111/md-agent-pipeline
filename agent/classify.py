@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 
 from agent.validation import ValidationRecord
@@ -30,15 +31,12 @@ REPAIRABLE_BINARIES = frozenset(
     }
 )
 
-ENV_MARKERS = (
+ENV_PHRASES = (
     "could not resolve host",
     "temporary failure in name resolution",
     "connection refused",
     "network is unreachable",
     "no space left on device",
-    "etimedout",
-    "econnrefused",
-    "enotfound",
     "failed to fetch",
     "registry.npmjs.org",
     "pypi.org",
@@ -50,7 +48,14 @@ ENV_MARKERS = (
     "codex cli not found",
     "validation executable not found",
     "timed out after",
+    "getaddrinfo enotfound",
+    "name or service not known",
+    "nodename nor servname provided",
+    "unknownhostexception",
 )
+
+# Errno tokens must be whole words. "enotfound" must not match FileNotFoundError.
+ENV_ERRNO_RE = re.compile(r"\b(?:etimedout|econnrefused|enotfound)\b", re.IGNORECASE)
 
 ESCALATION_MARKERS = (
     "iam policy",
@@ -88,7 +93,7 @@ def classify_output(
     exit_code: int | None = None,
 ) -> FailureClass:
     text = f"{stdout}\n{stderr}".lower()
-    if any(marker in text for marker in ENV_MARKERS):
+    if any(marker in text for marker in ENV_PHRASES) or ENV_ERRNO_RE.search(text):
         return FailureClass.ENVIRONMENT_FAILURE
     if any(marker in text for marker in ESCALATION_MARKERS):
         return FailureClass.ESCALATION_REQUIRED

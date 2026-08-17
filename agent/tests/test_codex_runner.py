@@ -17,6 +17,7 @@ from agent.codex_runner import (
     build_codex_diagnostic,
     build_codex_env,
     build_implementation_prompt,
+    build_post_codex_diagnostic,
     detach_codex_api_key,
     extract_jsonl_error,
     redact_secrets,
@@ -267,6 +268,23 @@ def test_run_codex_emits_repair_diagnostic(capsys: pytest.CaptureFixture[str]) -
     assert result.diagnostic["error_source"] == "jsonl"
     assert "codex-secret" not in result.diagnostic["error"]
     assert "codex-secret" not in capsys.readouterr().err
+
+
+def test_post_codex_diagnostic_includes_changed_paths_and_redacts_message() -> None:
+    diagnostic = build_post_codex_diagnostic(
+        exit_code=0,
+        changed_paths=(),
+        stage="implementation",
+        attempt=0,
+        final_message="Inspected repo. CODEX_API_KEY=codex-secret. No changes.",
+        secrets=["codex-secret"],
+    )
+    assert diagnostic["event"] == "codex.diagnostic"
+    assert diagnostic["exit_code"] == 0
+    assert diagnostic["changed_paths"] == []
+    assert diagnostic["stage"] == "implementation"
+    assert "codex-secret" not in diagnostic["final_message"]
+    assert "No changes" in diagnostic["final_message"]
 
 
 def test_timeout_is_environment_failure() -> None:

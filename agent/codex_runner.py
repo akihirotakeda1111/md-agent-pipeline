@@ -396,6 +396,25 @@ def build_codex_diagnostic(
     }
 
 
+def build_post_codex_diagnostic(
+    *,
+    exit_code: int,
+    changed_paths: tuple[str, ...] | list[str],
+    stage: str,
+    attempt: int,
+    final_message: str | None,
+    secrets: list[str],
+) -> dict[str, Any]:
+    return {
+        "event": "codex.diagnostic",
+        "exit_code": exit_code,
+        "changed_paths": list(changed_paths),
+        "stage": resolve_diagnostic_stage(stage),
+        "attempt": max(0, attempt),
+        "final_message": sanitize_diagnostic_text(final_message or "", secrets),
+    }
+
+
 def emit_codex_diagnostic(
     diagnostic: dict[str, Any],
     *,

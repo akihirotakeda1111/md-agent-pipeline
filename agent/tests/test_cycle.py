@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -301,6 +302,56 @@ def test_environment_failure_is_not_repaired(tmp_path: Path) -> None:
     assert result.classification is not None
     assert result.classification.value == "ENVIRONMENT_FAILURE"
     assert calls["n"] == 1
+
+
+def test_cycle_repairs_file_not_found_after_codex_noop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, spec_path = _init_repo(tmp_path, limit=1)
+    (repo / "check_app.py").write_text(
+        "from pathlib import Path\n"
+        "print(Path('src/app.py').read_text(encoding='utf-8'))\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "check_app.py")
+    _git(repo, "commit", "-m", "file-not-found validation")
+    calls = {"n": 0}
+
+    def executor(command: list[str], *, cwd: str, **_kwargs: object) -> ProcessResult:
+        calls["n"] += 1
+        last_message = Path(command[command.index("--output-last-message") + 1])
+        if calls["n"] == 1:
+            last_message.write_text(
+                "Inspected repository; no changes required.\n",
+                encoding="utf-8",
+            )
+            return ProcessResult(0, "", "")
+        _write_ok(cwd)
+        last_message.write_text("Created src/app.py\n", encoding="utf-8")
+        return ProcessResult(0, "", "")
+
+    result = run_task_cycle(
+        spec_path,
+        repo_root=repo,
+        env=_env(),
+        executor=executor,
+        persist_state=False,
+    )
+    assert result.outcome == "TASK_COMPLETED"
+    assert result.repair_attempts == 1
+    assert calls["n"] == 2
+    assert (repo / "src" / "app.py").read_text(encoding="utf-8") == "ok\n"
+    emitted = [
+        json.loads(line)
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("{") and "codex.diagnostic" in line
+    ]
+    assert emitted
+    first = emitted[0]
+    assert first["exit_code"] == 0
+    assert first["changed_paths"] == []
+    assert first["stage"] == "implementation"
+    assert "no changes required" in first["final_message"]
 
 
 def test_final_verification_success_and_failure(tmp_path: Path) -> None:
