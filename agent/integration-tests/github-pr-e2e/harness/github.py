@@ -7,6 +7,10 @@ from typing import Any
 from .models import PullRequestEvidence, RunEvidence, WorkflowInfo
 from .process import run
 
+ACTIVE_RUN_STATUSES = frozenset(
+    {"queued", "in_progress", "waiting", "pending", "requested", "waiting_for_review"}
+)
+
 
 class GitHub:
     def __init__(self, repo: str) -> None:
@@ -67,26 +71,41 @@ class GitHub:
         )
 
     def matching_runs(
-        self, workflow_id: int, branch: str, sha: str, event: str
+        self,
+        workflow_id: int,
+        branch: str,
+        sha: str,
+        event: str,
+        *,
+        exclude_ids: set[int] | None = None,
     ) -> list[dict[str, Any]]:
         data = self.api(
             f"repos/{self.repo}/actions/workflows/{workflow_id}/runs",
             fields={"branch": branch, "event": event, "per_page": "100"},
         )
+        skipped = exclude_ids or set()
         return [
             item
             for item in data.get("workflow_runs", [])
             if item.get("head_branch") == branch
             and item.get("head_sha") == sha
             and item.get("event") == event
+            and int(item["id"]) not in skipped
         ]
 
     def discover_unique_run(
-        self, workflow_id: int, branch: str, sha: str, event: str, timeout_seconds: int
+        self,
+        workflow_id: int,
+        branch: str,
+        sha: str,
+        event: str,
+        timeout_seconds: int,
+        *,
+        exclude_ids: set[int] | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            matches = self.matching_runs(workflow_id, branch, sha, event)
+            matches = self.matching_runs(workflow_id, branch, sha, event, exclude_ids=exclude_ids)
             if len(matches) > 1:
                 raise AssertionError(
                     "ambiguous workflow run: "
@@ -133,13 +152,30 @@ class GitHub:
             jobs=jobs,
         )
 
-    def rerun(self, run_id: int) -> None:
-        self.api(
-            f"repos/{self.repo}/actions/runs/{run_id}/rerun",
-            method="POST",
-            payload={},
-            expect_json=False,
+    def cancel_stuck_run(self, run_id: int, timeout_seconds: int) -> dict[str, Any]:
+        data = self.api(f"repos/{self.repo}/actions/runs/{run_id}")
+        status = str(data.get("status") or "")
+        attempt = int(data.get("run_attempt") or 1)
+        if status not in ACTIVE_RUN_STATUSES:
+            return {"cancelled": False, "status": status, "attempt": attempt}
+        completed = run(
+            ["gh", "api", "--method", "POST", f"repos/{self.repo}/actions/runs/{run_id}/cancel"],
+            check=False,
         )
+        requested = completed.returncode == 0
+        if completed.returncode != 0:
+            detail = f"{completed.stdout}\n{completed.stderr}".lower()
+            if "409" not in detail and "cannot cancel" not in detail:
+                raise RuntimeError(f"failed to cancel workflow run {run_id}: {detail[-1000:]}")
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            data = self.api(f"repos/{self.repo}/actions/runs/{run_id}")
+            status = str(data.get("status") or "")
+            attempt = int(data.get("run_attempt") or 1)
+            if status not in ACTIVE_RUN_STATUSES:
+                return {"cancelled": requested, "status": status, "attempt": attempt}
+            time.sleep(3)
+        raise TimeoutError(f"workflow run {run_id} did not stop after cancel")
 
     def open_pulls(self, head_branch: str, base_branch: str) -> list[dict[str, Any]]:
         return self.api(

@@ -111,13 +111,13 @@ python agent/integration-tests/git-pr-observability/run.py
 
 ### Phase 5–6 — Real GitHub E2E smoke
 
-本番 `agent-execute.yml` をそのまま使い、Real Codex と Real GitHub 上で Commit / Push / PR 作成と、workflow rerun による PR reuse を1シナリオで確認します。E2E専用workflowやintake例外は追加しません。Task Spec の `base_branch` は temporary branch（`e2e/phase6-*`）自身です。repository default へは commit しません。
+本番 `agent-execute.yml` をそのまま使い、Real Codex と Real GitHub 上で Commit / Push / PR 作成と、既存 `workflow_dispatch` による PR reuse を1シナリオで確認します。E2E専用workflowやintake例外は追加しません。Task Spec の `base_branch` は temporary branch（`e2e/phase6-*`）自身です。repository default へは commit しません。
 
 `gh` には対象repositoryについて次が必要です。
 
 - **Contents: write** — temporary base / feature branch の push と delete
 - **Pull requests: write** — PR の read / close
-- **Actions: write** — run の read と rerun
+- **Actions: write** — run の read / dispatch / cancel
 
 Production 側は既存 Phase 6 Manual Setup（Secret `CODEX_API_KEY`、Actions からの PR 作成許可、workflow active）があれば足しません。Harness は `CODEX_API_KEY` を読みません。
 

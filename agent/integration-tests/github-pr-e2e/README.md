@@ -108,30 +108,35 @@ Delivery head commitとPR差分はgenerated fileだけを含む必要があり�
 
 ## Run 2 — Restart and reconciliation
 
-Run 1のGitHub Actions runをrerunします。同じworkflow ID、source ref、HEAD SHA、event、work unitを維持し、`run_attempt`だけを増やします。
+Run 1 success のあと、同じ GitHub Actions run は rerun しません。source branch tip が Run 1 SHA のままであることを確認し、stuck な rerun attempt があれば cancel してから、既存 Production `workflow_dispatch` で **新しい workflow run** を起動します。
 
 ```text
-same Task Spec / same source SHA
+same Task Spec / same source ref / same SHA
+-> workflow_dispatch (new run_id, attempt 1)
 -> Production execute starts again without durable ephemeral state
 -> Production deliver finds existing open PR
 -> spec_id + head + base + work-unit marker reconciliation
 -> same PR reused
 ```
 
+GitHub の same-run rerun（attempt 増加）には依存しません。Production の task_id concurrency は変更しません。
+
 次を確認します。
 
-- rerun conclusion、execute、deliverがsuccess
-- run identity検索結果が引き続き1件
-- open PR数が1件
-- PR number/URL/head/base/head SHAがRun 1と同じ
-- feature branch SHAが変化していない
-- duplicate PR/commitが作られていない
+- Run 2 の conclusion、execute、deliver が success
+- `run2.run_id != run1.run_id` かつ `run2.attempt == 1`
+- Run 2 の ref / SHA が Run 1 と同じ
+- `workflow_dispatch` run の identity 検索結果が 1 件
+- open PR 数が 1 件
+- PR number/URL/head/base/head SHA が Run 1 と同じ
+- feature branch SHA が変化していない
+- duplicate PR/commit が作られていない
 
 Run 2 logsからstructured JSON eventを抽出できる場合、`DELIVERY_VALIDATION_STARTED`、`DELIVERY_VALIDATION_PASSED`、`PR_CREATED`がないことも確認します。イベントがlogsへ公開されていない場合は`not_observable`としてreportへ記録し、E2EのためにProduction eventを追加しません。
 
 ## Existing trigger selection
 
-defaultは`--trigger push`です。temporary base branchへ Task Spec を push し、現行 intake をそのまま通します。E2E専用triggerは使いません。
+defaultは`--trigger push`です。Run 1 は temporary base branchへ Task Spec を push し、現行 intake をそのまま通します。Run 2 は `--trigger` に関係なく既存 `workflow_dispatch` で起動します。E2E専用triggerは使いません。
 
 `--trigger auto` は既存push filtersがsource branchとTask Spec pathに一致すればpush、一致しなければ既存`workflow_dispatch`、どちらも使えなければ`E2E_SAFE_TRIGGER_UNAVAILABLE`です。本番契約を変えないため、このsuiteの受け入れ経路はpushです。
 
@@ -150,7 +155,7 @@ Harness credentialとProduction workflow credentialは別です。
 Harnessを実行する`gh` credentialには、対象repositoryについて次が必要です。
 
 - source branchのpush/delete
-- Actions run read/rerun
+- Actions run read / dispatch / cancel
 - Pull Request read/close
 - feature branch cleanup
 
@@ -228,12 +233,18 @@ FAIL_CLEANUP_FAILED
   "task_id": "phase6-e2e-...",
   "target_branch": "agent/phase6-e2e-...",
   "run1": {
+    "run_id": "...",
+    "run_attempt": 1,
+    "event": "push",
     "workflow_url": "...",
     "sha": "...",
     "conclusion": "success",
     "pr_url": "..."
   },
   "run2": {
+    "run_id": "...",
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
     "workflow_url": "...",
     "sha": "...",
     "conclusion": "success",
@@ -249,10 +260,10 @@ FAIL_CLEANUP_FAILED
 
 ```text
 Run 1
-Production workflow -> Real Codex -> Commit -> Push -> Real PR
+Production push -> Real Codex -> Commit -> Push -> Real PR
 
 Run 2
-same work unit rerun -> existing PR reconciliation -> same PR reused
+same work unit workflow_dispatch -> existing PR reconciliation -> same PR reused
 ```
 
 終了コード0、workflow/jobs success、remote branch/commit/PR実在、PR identity/body/label PASS、Run 2 PR count 1、Fake Codex/GitHubなしをAcceptanceとします。

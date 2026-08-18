@@ -17,8 +17,10 @@ from harness.assertions import (
     assert_no_new_delivery_events,
     assert_pr,
     assert_pr_files,
+    assert_restart_run,
     assert_reuse,
     assert_run_identity_count,
+    assert_source_tip_matches_run,
     assert_successful_run,
 )
 from harness.git import GitRepository
@@ -227,17 +229,26 @@ def main() -> int:
             trigger, definitions = choose_trigger(
                 workflow_doc, args.trigger, scenario.source_branch, scenario.task_spec
             )
-            supplied = dispatch_inputs(args.dispatch_input)
-            inputs = (
-                resolve_dispatch_inputs(
-                    definitions, supplied, spec_path=scenario.task_spec, task_id=scenario.task_id
-                )
-                if trigger == "workflow_dispatch"
-                else {}
+            _, dispatch_definitions = choose_trigger(
+                workflow_doc, "workflow_dispatch", scenario.source_branch, scenario.task_spec
             )
+            supplied = dispatch_inputs(args.dispatch_input)
+            dispatch_inputs_resolved = resolve_dispatch_inputs(
+                dispatch_definitions,
+                supplied,
+                spec_path=scenario.task_spec,
+                task_id=scenario.task_id,
+            )
+            inputs = dispatch_inputs_resolved if trigger == "workflow_dispatch" else {}
             workflow = github.workflow(WORKFLOW_FILE, trigger, definitions)
             report["workflow"].update(
-                {"id": workflow.id, "name": workflow.name, "path": workflow.path, "event": trigger}
+                {
+                    "id": workflow.id,
+                    "name": workflow.name,
+                    "path": workflow.path,
+                    "event": trigger,
+                    "run2_event": "workflow_dispatch",
+                }
             )
 
             if github.branch_exists(scenario.source_branch) or github.branch_exists(
@@ -286,13 +297,53 @@ def main() -> int:
             report["delivery_commit"] = {"sha": pr1.head_sha, "files": commit_files}
             report["pull_request_files"] = pull_files
 
-            github.rerun(run1.id)
-            run2_data = github.wait_attempt(run1.id, run1.attempt + 1, args.timeout_seconds)
-            run2 = github.run_evidence(run2_data)
-            assert_successful_run(run2, workflow, scenario, source_sha, run1.attempt + 1)
-            assert run2.id == run1.id
+            source_tip = github.branch_sha(scenario.source_branch)
+            assert_source_tip_matches_run(run1, source_sha, source_tip)
+            cancel_result = github.cancel_stuck_run(run1.id, args.discovery_timeout_seconds)
+            report["restart_prep"] = {
+                "source_tip": source_tip,
+                "stuck_run_cancel": cancel_result,
+            }
+
+            github.dispatch(workflow.id, scenario.source_branch, dispatch_inputs_resolved)
+            discovered2 = github.discover_unique_run(
+                workflow.id,
+                scenario.source_branch,
+                source_sha,
+                "workflow_dispatch",
+                args.discovery_timeout_seconds,
+                exclude_ids={run1.id},
+            )
             assert_run_identity_count(
-                github.matching_runs(workflow.id, scenario.source_branch, source_sha, trigger)
+                github.matching_runs(
+                    workflow.id,
+                    scenario.source_branch,
+                    source_sha,
+                    "workflow_dispatch",
+                    exclude_ids={run1.id},
+                )
+            )
+            run2_data = github.wait_attempt(int(discovered2["id"]), 1, args.timeout_seconds)
+            run2 = github.run_evidence(run2_data)
+            assert_successful_run(
+                run2,
+                workflow,
+                scenario,
+                source_sha,
+                1,
+                expected_event="workflow_dispatch",
+            )
+            assert_restart_run(
+                run1, run2, expected_event="workflow_dispatch", source_sha=source_sha
+            )
+            assert_run_identity_count(
+                github.matching_runs(
+                    workflow.id,
+                    scenario.source_branch,
+                    source_sha,
+                    trigger,
+                    exclude_ids={run2.id} if trigger == "workflow_dispatch" else None,
+                )
             )
             pulls_after = github.open_pulls(scenario.target_branch, scenario.base_branch)
             assert len(pulls_after) == 1, f"duplicate or missing PR after reuse: {len(pulls_after)}"

@@ -17,7 +17,9 @@ from harness.assertions import (
     assert_no_new_delivery_events,
     assert_pr,
     assert_pr_files,
+    assert_restart_run,
     assert_reuse,
+    assert_source_tip_matches_run,
     assert_successful_run,
 )
 from harness.git import GitRepository
@@ -129,6 +131,41 @@ class HarnessTests(unittest.TestCase):
         assert_pr_files([self.scenario.generated_file], self.scenario)
         assert_reuse(pr1, pr1, "b" * 40)
         assert_no_new_delivery_events(["SPEC_VALIDATED", "WORKFLOW_COMPLETED"])
+
+    def test_restart_run_requires_new_dispatch_identity(self) -> None:
+        source_sha = "a" * 40
+        run1 = RunEvidence(
+            10,
+            1,
+            "https://example.invalid/runs/10",
+            source_sha,
+            self.scenario.source_branch,
+            "push",
+            "success",
+            {"execute": "success", "deliver": "success"},
+        )
+        run2 = RunEvidence(
+            11,
+            1,
+            "https://example.invalid/runs/11",
+            source_sha,
+            self.scenario.source_branch,
+            "workflow_dispatch",
+            "success",
+            {"execute": "success", "deliver": "success"},
+        )
+        assert_source_tip_matches_run(run1, source_sha, source_sha)
+        assert_restart_run(run1, run2, expected_event="workflow_dispatch", source_sha=source_sha)
+        with self.assertRaises(AssertionError):
+            assert_restart_run(
+                run1, run1, expected_event="workflow_dispatch", source_sha=source_sha
+            )
+
+    def test_run2_uses_dispatch_not_same_run_rerun(self) -> None:
+        source = inspect.getsource(runner.main)
+        self.assertNotIn("github.rerun(", source)
+        self.assertIn("dispatch_inputs_resolved", source)
+        self.assertIn("cancel_stuck_run", source)
 
     def test_report_has_required_machine_readable_fields(self) -> None:
         report = report_skeleton(self.scenario)
