@@ -212,7 +212,6 @@ def _deliver(
         number = int(pull["number"])
         url = str(pull.get("html_url") or "")
         apply_status_label(github, number, "agent:ready")
-        emit(PR_CREATED, "reused existing pull request", task_id=spec.id, state="PR_CREATED")
         return DeliveryResult(
             outcome="PR_CREATED",
             pr_url=url or None,

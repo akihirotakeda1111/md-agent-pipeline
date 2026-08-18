@@ -71,7 +71,7 @@ workflow YAML は構造解析のみです。execute は `contents: read` と `CO
 | 36〜40 | isolation | execute に GitHub write なし、deliver に Codex 秘密なし |
 | W01〜W05 | workflow | permissions、`CODEX_API_KEY` 配置、empty `GITHUB_TOKEN`、persist-credentials |
 | F01〜F02 | failure flow | 本番 execute→deliver で通知・label・Job Summary まで到達 |
-| O01〜O03 | observability | 必須イベントの部分順序、reuse で delivery validation なし、Repair Attempts 累積 |
+| O01〜O03 | observability | 必須イベントの部分順序、reuse で delivery validation / PR_CREATED なし、Repair Attempts 累積 |
 
 Observability はイベント列の完全一致を要求しません。必須イベントの存在と、契約上重要な部分順序だけを見ます。
 
@@ -82,7 +82,7 @@ FINAL_VALIDATION_PASSED
 < PR_CREATED
 ```
 
-reuse では `DELIVERY_VALIDATION_STARTED` / `DELIVERY_VALIDATION_PASSED` が無く、PR create / patch apply / commit 増加も無いことを副作用から確認します。
+reuse では `DELIVERY_VALIDATION_STARTED` / `DELIVERY_VALIDATION_PASSED` / `PR_CREATED` が無く、PR create / patch apply / commit 増加も無いことを副作用から確認します。
 
 `Repair Attempts` は work unit 全体の累積回数です。現在 Task の回数ではありません。PR body / Job Summary / `report.json` は同じ値を持ちます。Task 切替では reset しません。
 

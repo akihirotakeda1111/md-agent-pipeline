@@ -29,6 +29,7 @@ def test_24_25_same_work_unit_open_pr_is_reused_without_new_delivery(
     names = event_names(result.events or services.observations.events)
     assert "DELIVERY_VALIDATION_STARTED" not in names
     assert "DELIVERY_VALIDATION_PASSED" not in names
+    assert "PR_CREATED" not in names
 
 
 @pytest.mark.parametrize(

@@ -121,6 +121,7 @@ def test_reuse_does_not_emit_new_delivery_validation(
     names = event_names(result.events or services.observations.events)
     assert "DELIVERY_VALIDATION_STARTED" not in names
     assert "DELIVERY_VALIDATION_PASSED" not in names
+    assert "PR_CREATED" not in names
     assert not services.github.calls("create_pull_request")
 
 
@@ -150,6 +151,7 @@ def test_full_production_reuse_flow_omits_new_delivery_events(
     assert "FINAL_VALIDATION_PASSED" in names
     assert "DELIVERY_VALIDATION_STARTED" not in names
     assert "DELIVERY_VALIDATION_PASSED" not in names
+    assert "PR_CREATED" not in names
     assert not services.github.calls("create_pull_request")
 
 

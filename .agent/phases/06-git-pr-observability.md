@@ -297,6 +297,7 @@ deliver時:
 
 - 同一work unitと確認済みの既存open PRは再利用する
 - reuse時はpatch再適用やFinal Verification再実行をしない
+- reuse時は `PR_CREATED` を emit しない。outcome は既存PR再利用でも `PR_CREATED` のままにする
 - `spec_id`、target branch、base branch、PR work-unit markerを照合する
 - 同じbranchのPRが存在するだけでは再利用しない
 - 同一work unitと確認できなければ自動適用 / rebaseせずESCALATED
