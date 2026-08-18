@@ -425,6 +425,7 @@ def test_same_branch_pr_without_work_unit_marker_is_not_reused(tmp_path: Path) -
         summary_path=tmp_path / "summary.md",
     )
     assert result.outcome == "ESCALATED"
+    assert result.code == "WORK_UNIT_PR_MISMATCH"
     assert github.created_pulls == 0
     assert github.labels.get("issue:7", {}).get("labels") != "agent:ready"
 

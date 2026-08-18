@@ -55,6 +55,7 @@ class DeliveryResult:
     notice: EscalationNotice | None
     summary: str
     message: str
+    code: str | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class DeliveryResult:
             "commit_sha": self.commit_sha,
             "notice": None if self.notice is None else self.notice.to_json_dict(),
             "message": self.message,
+            "code": self.code,
         }
 
 
@@ -219,6 +221,7 @@ def _deliver(
             notice=None,
             summary="",
             message="reused existing pull request",
+            code=None,
         )
 
     if (
@@ -315,6 +318,7 @@ def _deliver(
         notice=None,
         summary="",
         message="created pull request",
+        code=None,
     )
 
 
@@ -343,6 +347,7 @@ def _report_failure(
         notice=notice,
         summary="",
         message=report.message,
+        code=report.classification,
     )
     _notify(github, spec, result, cfg)
     event = FAILED if result.outcome == "FAILED" else ESCALATED
@@ -360,6 +365,7 @@ def _failure_result(
     outcome = "FAILED" if classification is FailureClass.ENVIRONMENT_FAILURE else "ESCALATED"
     event = FAILED if outcome == "FAILED" else ESCALATED
     emit(event, str(error), task_id=spec.id, state=report.state.state.value)
+    code = error.code if isinstance(error, AgentError) else None
     return DeliveryResult(
         outcome=outcome,
         pr_url=None,
@@ -368,6 +374,7 @@ def _failure_result(
         notice=_notice_from_report(spec, report, str(error), classification, cfg),
         summary="",
         message=str(error),
+        code=code,
     )
 
 
@@ -422,6 +429,9 @@ def _notify(
 
 
 def _summary_markdown(spec: TaskSpec, report: WorkUnitReport, result: DeliveryResult) -> str:
+    detail = result.message
+    if result.code:
+        detail = f"{result.code}: {result.message}"
     return render_summary(
         spec_path=report.spec_path or spec.id,
         task_id=spec.id,
@@ -432,6 +442,6 @@ def _summary_markdown(spec: TaskSpec, report: WorkUnitReport, result: DeliveryRe
         validation_results=report.validation_results,
         repair_attempts=report.repair_attempts,
         pr_url=result.pr_url,
-        failure_reason=result.message if result.outcome == "FAILED" else None,
-        escalation_reason=result.message if result.outcome == "ESCALATED" else None,
+        failure_reason=detail if result.outcome == "FAILED" else None,
+        escalation_reason=detail if result.outcome == "ESCALATED" else None,
     )

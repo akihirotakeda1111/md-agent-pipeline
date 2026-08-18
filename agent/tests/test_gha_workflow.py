@@ -78,9 +78,9 @@ def test_permissions_isolate_codex_from_github_write() -> None:
     assert "openai/codex-action" not in yaml.safe_dump(jobs["deliver"])
 
 
-def test_checkout_persists_credentials_only_on_deliver() -> None:
+def test_checkout_never_persists_credentials() -> None:
     payload, _ = _load()
-    expected = {"parse-spec": False, "execute": False, "deliver": True}
+    expected = {"parse-spec": False, "execute": False, "deliver": False}
     for name, persist in expected.items():
         checkout = next(
             step
