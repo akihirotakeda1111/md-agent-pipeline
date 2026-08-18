@@ -37,7 +37,7 @@ python -m pytest agent/tests/test_workflow_contract.py agent/tests/test_phase5_h
 - **Actions: read** — workflow run の list / view / watch
 - **Actions: write** — `workflow_dispatch`（04）
 
-classic PAT なら `repo` + `workflow`。fine-grained なら Contents を Read and write、Actions を Read and write。ephemeral branch を push し、完了後に削除します。
+classic PAT なら `repo` + `workflow`。fine-grained なら Contents を Read and write、Actions を Read and write、Pull requests を Read and write。ephemeral の source / target branch を push し、生成 PR があれば閉じてから削除します。
 
 ```powershell
 python agent/integration-tests/github-actions/run.py --repo OWNER/REPO
@@ -52,7 +52,7 @@ python agent/integration-tests/github-actions/run.py --repo OWNER/REPO --case 04
 python agent/integration-tests/github-actions/run.py --repo OWNER/REPO --case 01-normal-success
 ```
 
-`--keep-branch` で掃除を省略します。失敗時の調査用です。`--report-dir` で出力先を変えられます（省略時は `reports/`）。
+`--keep-branch` で掃除を省略します。失敗時の調査用です。source / target branch と生成 PR を残します。`--report-dir` で出力先を変えられます（省略時は `reports/`）。
 
 実行後は他 suite と同じく次のファイルに全ケースをまとめます。失敗しても行は残し、`run_id` / URL を落とさないようにしています。
 
@@ -68,12 +68,12 @@ JSON の各ケースは `status`（PASS/FAIL）、job conclusion、`run_id`、UR
 
 | Case | Trigger | Spec | Codex | 期待 |
 |---|---|---|---|---|
-| `01-normal-success` | push | 正当 spec、`base_branch` = ephemeral branch | Real Codex | workflow success、Parse spec / Execute task / Deliver が success |
+| `01-normal-success` | push | 正当 spec。ephemeral の source/base と別名の target | Real Codex | workflow success。Phase 5 主検証は Parse spec / Execute task success |
 | `02-invalid-spec` | push | 不正 spec | なし | workflow failure、Parse spec failure、Execute / Deliver skipped |
 | `03-feature-branch-skip` | push | 正当 spec、`base_branch` = default branch ≠ branch | なし | workflow success、Parse spec success、Execute / Deliver skipped |
 | `04-dispatch-skip` | workflow_dispatch `--ref` ephemeral | 専用 fixture を `specs/tasks/_it-*.md` に載せる。`base_branch` = default branch ≠ branch | なし | event=workflow_dispatch、Parse spec success、Execute / Deliver skipped |
 
-01 だけ execute job が始まります。本番 YAML では `openai/codex-action` が prompt なしの sandbox bootstrap を先に走り、そのあと `run-work-unit.py` が Real Codex を起動します。Action は Orchestrator の代替ではありません。bootstrap が失敗すれば execute は Orchestrator まで到達せず FAIL します。01 だけリポジトリ Secret `CODEX_API_KEY` が必要です。deliver job は write token で Commit / PR します。Settings で GitHub Actions の PR 作成を許可してください。
+01 だけ execute job が始まります。intake のため spec の `base_branch` は spec を push した ephemeral source です。Deliver が PR を開けるよう `target_branch` は別名にします。本番 YAML では `openai/codex-action` が prompt なしの sandbox bootstrap を先に走り、そのあと `run-work-unit.py` が Real Codex を起動します。Action は Orchestrator の代替ではありません。bootstrap が失敗すれば execute は Orchestrator まで到達せず FAIL します。01 だけリポジトリ Secret `CODEX_API_KEY` が必要です。workflow 全体の success も確認します。Deliver の PR 内容は Phase 5 の主検証対象ではなく `github-pr-e2e` です。Settings で GitHub Actions の PR 作成を許可してください。完了後は source branch、target branch、生成 PR を削除します。
 
 02–04 は execute が始まらないため Secret なしで回せます。bootstrap も走りません。04 の `--ref` に default branch を渡してはいけません。正当 spec だと Real Codex が起動します。
 

@@ -29,7 +29,7 @@ from integration.runs import (  # noqa: E402
     match_triggered_runs,
     require_unique_run,
 )
-from integration.spec_template import render_spec  # noqa: E402
+from integration.spec_template import plan_branches, render_spec  # noqa: E402
 from integration.verify_contract import collect_failures  # noqa: E402
 
 FAKE_KEY = "sk-test-not-real-codex-key-value"
@@ -52,13 +52,15 @@ def test_render_and_parse_normal_fixture(tmp_path: Path) -> None:
         template,
         task_id="p5it01deadbeef",
         base_branch="agent/p5it-01-deadbeef",
-        target_branch="agent/p5it-01-deadbeef",
+        target_branch="agent/p5it-01-deadbeef-pr",
     )
     path = tmp_path / "spec.md"
     path.write_text(rendered, encoding="utf-8")
     spec = parse_spec(path)
     assert spec.id == "p5it01deadbeef"
     assert spec.base_branch == "agent/p5it-01-deadbeef"
+    assert spec.target_branch == "agent/p5it-01-deadbeef-pr"
+    assert spec.base_branch != spec.target_branch
     assert spec.tasks[0].id == "write-result"
 
 
@@ -148,7 +150,37 @@ def test_cases_json_matches_four_acceptance_ids() -> None:
     ]
     assert config["workflow"] == "agent-execute.yml"
     assert "dispatch_spec_path" not in config
+    assert config["cases"][0]["base_branch_mode"] == "self"
+    assert config["cases"][0]["parse_job"] == "success"
+    assert config["cases"][0]["execute_job"] == "success"
+    assert config["cases"][0]["expected_conclusion"] == "success"
     assert config["cases"][3]["fixture"] == "04-dispatch-skip.SKIP.md"
+
+
+def test_plan_branches_self_mode_uses_distinct_target() -> None:
+    task_id, source, target, base = plan_branches(
+        "01-normal-success",
+        base_branch_mode="self",
+        default_ref="main",
+        suffix="deadbeef",
+    )
+    assert task_id == "p5it01deadbeef"
+    assert source == "agent/p5it-01-deadbeef"
+    assert base == source
+    assert target == "agent/p5it-01-deadbeef-pr"
+    assert target != source
+
+
+def test_plan_branches_default_mode_keeps_single_ephemeral() -> None:
+    _, source, target, base = plan_branches(
+        "03-feature-branch-skip",
+        base_branch_mode="default",
+        default_ref="main",
+        suffix="deadbeef",
+    )
+    assert source == "agent/p5it-03-deadbeef"
+    assert target == source
+    assert base == "main"
 
 
 SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -149,6 +149,7 @@ def empty_case_report(case: dict[str, Any]) -> dict[str, Any]:
         "url": None,
         "head_sha": None,
         "branch": None,
+        "target_branch": None,
         "conclusion": None,
         "jobs": {},
         "codex_api_key_present": None,

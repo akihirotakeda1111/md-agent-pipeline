@@ -33,7 +33,7 @@ from integration.runs import (  # noqa: E402
     match_triggered_runs,
     require_unique_run,
 )
-from integration.spec_template import render_spec  # noqa: E402
+from integration.spec_template import plan_branches, render_spec  # noqa: E402
 
 WORKFLOW = "agent-execute.yml"
 GIT_EMAIL = "phase5-it@example.com"
@@ -258,12 +258,52 @@ def create_worktree(branch: str) -> Path:
     return path
 
 
+def delete_remote_branch(origin: Path, branch: str) -> None:
+    run_cmd(["git", "push", "origin", "--delete", branch], cwd=origin, check=False)
+
+
+def close_open_pulls(repo: str, *, head: str, base: str) -> list[str]:
+    errors: list[str] = []
+    completed = gh(
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--head",
+        head,
+        "--base",
+        base,
+        "--state",
+        "open",
+        "--json",
+        "number",
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "gh pr list failed").strip()
+        return [f"list PRs {head} -> {base}: {detail}"]
+    try:
+        pulls = json.loads(completed.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        return [f"list PRs {head} -> {base}: {exc}"]
+    for item in pulls:
+        number = item.get("number")
+        if not isinstance(number, int):
+            errors.append(f"PR entry missing number: {item!r}")
+            continue
+        closed = gh("pr", "close", str(number), "--repo", repo, check=False)
+        if closed.returncode != 0:
+            detail = (closed.stderr or closed.stdout or "gh pr close failed").strip()
+            errors.append(f"close PR #{number}: {detail}")
+    return errors
+
+
 def cleanup_branch(worktree: Path | None, branch: str, *, keep: bool) -> None:
     if keep:
         print(f"keeping branch {branch}", file=sys.stderr)
         return
     origin = worktree if worktree is not None and worktree.exists() else REPO_ROOT
-    run_cmd(["git", "push", "origin", "--delete", branch], cwd=origin, check=False)
+    delete_remote_branch(origin, branch)
     if worktree is not None and worktree.exists():
         run_cmd(
             ["git", "worktree", "remove", "--force", str(worktree)],
@@ -274,21 +314,47 @@ def cleanup_branch(worktree: Path | None, branch: str, *, keep: bool) -> None:
     run_cmd(["git", "worktree", "prune"], cwd=REPO_ROOT, check=False)
 
 
-def render_case_files(case: dict[str, Any], *, default_ref: str) -> tuple[str, str, str, str]:
+def cleanup_case(
+    *,
+    repo: str,
+    worktree: Path | None,
+    source_branch: str,
+    target_branch: str,
+    keep: bool,
+) -> list[str]:
+    if keep:
+        print(
+            f"keeping source {source_branch}, target {target_branch}, and open PRs",
+            file=sys.stderr,
+        )
+        return []
+    errors: list[str] = []
+    origin = worktree if worktree is not None and worktree.exists() else REPO_ROOT
+    if target_branch != source_branch:
+        errors.extend(close_open_pulls(repo, head=target_branch, base=source_branch))
+        delete_remote_branch(origin, target_branch)
+        run_cmd(["git", "branch", "-D", target_branch], cwd=REPO_ROOT, check=False)
+    cleanup_branch(worktree, source_branch, keep=False)
+    return errors
+
+
+def render_case_files(case: dict[str, Any], *, default_ref: str) -> tuple[str, str, str, str, str]:
     suffix = unique_suffix()
-    case_key = str(case["id"]).split("-", 1)[0]
-    task_id = f"p5it{case_key}{suffix}"
-    branch = f"agent/p5it-{case_key}-{suffix}"
-    base_branch = branch if case["base_branch_mode"] == "self" else default_ref
+    task_id, source_branch, target_branch, base_branch = plan_branches(
+        str(case["id"]),
+        base_branch_mode=str(case["base_branch_mode"]),
+        default_ref=default_ref,
+        suffix=suffix,
+    )
     relative = f"specs/tasks/_it-{task_id}.md"
     template = (SUITE / "fixtures" / str(case["fixture"])).read_text(encoding="utf-8")
     contents = render_spec(
         template,
         task_id=task_id,
         base_branch=base_branch,
-        target_branch=branch,
+        target_branch=target_branch,
     )
-    return task_id, branch, relative, contents
+    return task_id, source_branch, target_branch, relative, contents
 
 
 def run_push_case(
@@ -300,30 +366,36 @@ def run_push_case(
     keep_branch: bool,
 ) -> dict[str, Any]:
     report = empty_case_report(case)
-    task_id, branch, relative, contents = render_case_files(case, default_ref=default_ref)
+    task_id, source_branch, target_branch, relative, contents = render_case_files(
+        case, default_ref=default_ref
+    )
     report["task_id"] = task_id
     report["spec_path"] = relative
-    report["branch"] = branch
+    report["branch"] = source_branch
+    report["target_branch"] = target_branch
     worktree: Path | None = None
     try:
-        worktree = create_worktree(branch)
+        worktree = create_worktree(source_branch)
         add_spec(worktree, relative, contents)
         known = list_run_ids(repo)
-        git(worktree, "push", "-u", "origin", branch)
+        git(worktree, "push", "-u", "origin", source_branch)
         head_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         report["head_sha"] = head_sha
         run_id = locate_run(
             repo,
-            branch=branch,
+            branch=source_branch,
             event="push",
             head_sha=head_sha,
             known_ids=known,
             timeout=locate_timeout,
         )
         report["run_id"] = run_id
-        report.update(assert_watched_run(repo, case, run_id, branch=branch, head_sha=head_sha))
+        report.update(
+            assert_watched_run(repo, case, run_id, branch=source_branch, head_sha=head_sha)
+        )
         report["task_id"] = task_id
         report["spec_path"] = relative
+        report["target_branch"] = target_branch
         if report.get("errors"):
             attach_failed_evidence(report, repo)
     except Exception as exc:
@@ -332,7 +404,16 @@ def run_push_case(
         if report.get("run_id"):
             attach_failed_evidence(report, repo)
     finally:
-        cleanup_branch(worktree, branch, keep=keep_branch)
+        cleanup_errors = cleanup_case(
+            repo=repo,
+            worktree=worktree,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            keep=keep_branch,
+        )
+        if cleanup_errors:
+            report.setdefault("errors", [])
+            report["errors"] = [*(report.get("errors") or []), *cleanup_errors]
     return finalize_case_report(report)
 
 
@@ -345,15 +426,18 @@ def run_dispatch_case(
     keep_branch: bool,
 ) -> dict[str, Any]:
     report = empty_case_report(case)
-    task_id, branch, relative, contents = render_case_files(case, default_ref=default_ref)
+    task_id, source_branch, target_branch, relative, contents = render_case_files(
+        case, default_ref=default_ref
+    )
     report["task_id"] = task_id
     report["spec_path"] = relative
-    report["branch"] = branch
+    report["branch"] = source_branch
+    report["target_branch"] = target_branch
     worktree: Path | None = None
     try:
-        worktree = create_worktree(branch)
+        worktree = create_worktree(source_branch)
         add_spec(worktree, relative, contents)
-        git(worktree, "push", "-u", "origin", branch)
+        git(worktree, "push", "-u", "origin", source_branch)
         head_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         report["head_sha"] = head_sha
         known = list_run_ids(repo)
@@ -364,22 +448,25 @@ def run_dispatch_case(
             "--repo",
             repo,
             "--ref",
-            branch,
+            source_branch,
             "-f",
             f"spec_path={relative}",
         )
         run_id = locate_run(
             repo,
-            branch=branch,
+            branch=source_branch,
             event="workflow_dispatch",
             head_sha=head_sha,
             known_ids=known,
             timeout=locate_timeout,
         )
         report["run_id"] = run_id
-        report.update(assert_watched_run(repo, case, run_id, branch=branch, head_sha=head_sha))
+        report.update(
+            assert_watched_run(repo, case, run_id, branch=source_branch, head_sha=head_sha)
+        )
         report["task_id"] = task_id
         report["spec_path"] = relative
+        report["target_branch"] = target_branch
         if report.get("errors"):
             attach_failed_evidence(report, repo)
     except Exception as exc:
@@ -388,7 +475,16 @@ def run_dispatch_case(
         if report.get("run_id"):
             attach_failed_evidence(report, repo)
     finally:
-        cleanup_branch(worktree, branch, keep=keep_branch)
+        cleanup_errors = cleanup_case(
+            repo=repo,
+            worktree=worktree,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            keep=keep_branch,
+        )
+        if cleanup_errors:
+            report.setdefault("errors", [])
+            report["errors"] = [*(report.get("errors") or []), *cleanup_errors]
     return finalize_case_report(report)
 
 
@@ -414,7 +510,7 @@ def main() -> int:
     parser.add_argument(
         "--keep-branch",
         action="store_true",
-        help="leave ephemeral branches for debugging",
+        help="leave ephemeral source/target branches and open PRs for debugging",
     )
     parser.add_argument(
         "--report-dir",
