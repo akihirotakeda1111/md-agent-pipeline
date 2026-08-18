@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import json
+from io import BytesIO
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote
+
+import pytest
+from agent.errors import AgentError
+from agent.github_api import GitHubClient, Requester
+from agent.labels import PHASE6_APPLIED_LABELS, ensure_agent_labels
+
+
+def _http_error(url: str, status: int, message: str) -> HTTPError:
+    body = json.dumps({"message": message}).encode("utf-8")
+    return HTTPError(url, status, message, hdrs={}, fp=BytesIO(body))
+
+
+def _client(requester: Requester) -> GitHubClient:
+    return GitHubClient(token="tok", repository="octo/repo", requester=requester)
+
+
+@pytest.mark.parametrize(
+    ("status", "message", "code"),
+    [
+        (401, "Bad credentials", "GITHUB_API_PERMISSION"),
+        (403, "Resource not accessible", "GITHUB_API_PERMISSION"),
+        (404, "Not Found", "GITHUB_NOT_FOUND"),
+        (422, "Validation Failed", "GITHUB_API_VALIDATION"),
+    ],
+)
+def test_http_error_is_classified_not_network(status: int, message: str, code: str) -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise _http_error(url, status, message)
+
+    with pytest.raises(AgentError) as caught:
+        _client(requester).request("GET", "/repos/octo/repo/labels/agent%3Aready")
+    assert caught.value.code == code
+    assert caught.value.code != "GITHUB_API_NETWORK"
+    assert message in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        URLError("getaddrinfo failed"),
+        URLError(ConnectionRefusedError("Connection refused")),
+    ],
+)
+def test_urlerror_is_network_failure(error: URLError) -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise error
+
+    with pytest.raises(AgentError) as caught:
+        _client(requester).request("GET", "/repos/octo/repo/labels/agent%3Aready")
+    assert caught.value.code == "GITHUB_API_NETWORK"
+
+
+def test_get_label_treats_http_404_as_missing() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise _http_error(url, 404, "Not Found")
+
+    assert _client(requester).get_label("agent:ready") is None
+
+
+def test_ensure_agent_labels_creates_after_get_404() -> None:
+    created: list[str] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        if method == "GET":
+            raise _http_error(url, 404, "Not Found")
+        assert method == "POST"
+        payload = json.loads(data or b"{}")
+        created.append(payload["name"])
+        return 201, payload
+
+    ensure_agent_labels(_client(requester))
+    assert created == list(PHASE6_APPLIED_LABELS)
+
+
+def test_get_label_does_not_swallow_permission_errors() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise _http_error(url, 401, "Bad credentials")
+
+    with pytest.raises(AgentError) as caught:
+        _client(requester).get_label("agent:ready")
+    assert caught.value.code == "GITHUB_API_PERMISSION"
+
+
+def test_label_get_encodes_colon() -> None:
+    urls: list[str] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        urls.append(url)
+        raise _http_error(url, 404, "Not Found")
+
+    assert _client(requester).get_label("agent:ready") is None
+    assert urls[0].endswith("/labels/agent%3Aready")
+    assert unquote(urls[0].rsplit("/", 1)[-1]) == "agent:ready"

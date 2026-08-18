@@ -88,14 +88,16 @@ class GitHubClient:
                 "GitHub API request timed out",
                 code="GITHUB_API_TIMEOUT",
             ) from exc
+        except HTTPError as exc:
+            # HTTPError subclasses URLError. Classify 401/403/404/422 as HTTP
+            # errors; GITHUB_API_NETWORK is only for DNS/connect failures.
+            detail = _read_http_error(exc)
+            raise _github_http_error(exc.code, detail) from exc
         except URLError as exc:
             raise AgentError.environment_failure(
                 f"GitHub API network error: {exc.reason}",
                 code="GITHUB_API_NETWORK",
             ) from exc
-        except HTTPError as exc:
-            detail = _read_http_error(exc)
-            raise _github_http_error(exc.code, detail) from exc
         if status >= 500:
             raise AgentError.environment_failure(
                 f"GitHub API {status}",
@@ -148,6 +150,8 @@ class GitHubClient:
         return response.payload
 
     def create_label(self, *, name: str, color: str, description: str) -> dict[str, Any]:
+        # Concurrent creates of the same label can return 422 "already exists".
+        # Treat that as success in a later hardening change; fail closed for now.
         response = self.request(
             "POST",
             f"/repos/{self.owner}/{self.repo}/labels",

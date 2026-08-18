@@ -372,7 +372,9 @@ class _FakeGitHub:
         return {"id": 1}
 
 
-def test_delivery_reuses_existing_pull_request(tmp_path: Path) -> None:
+def test_delivery_reuses_existing_pull_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     from agent.delivery import run_delivery
     from agent.workunit import file_sha256, write_work_unit_report
 
@@ -394,6 +396,15 @@ def test_delivery_reuses_existing_pull_request(tmp_path: Path) -> None:
     assert result.pr_number == 7
     assert github.created_pulls == 0
     assert "https://example.test/pull/7" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+    events = [
+        json.loads(line)["event"]
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    assert "PR_CREATED" not in events
+    assert "DELIVERY_VALIDATION_STARTED" not in events
+    assert "DELIVERY_VALIDATION_PASSED" not in events
+    assert "WORKFLOW_COMPLETED" in events
 
 
 def test_same_branch_pr_without_work_unit_marker_is_not_reused(tmp_path: Path) -> None:
@@ -734,6 +745,97 @@ def test_deliver_commits_after_scope_manifest_and_fv(tmp_path: Path) -> None:
     assert result.outcome == "PR_CREATED"
     assert github.created_pulls == 1
     assert (repo / "src" / "app.py").read_text(encoding="utf-8") == "ok\n"
+    assert "feature/deliver" in _git(origin, "branch")
+
+
+def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
+    import json
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from urllib.parse import unquote
+
+    from agent.delivery import run_delivery
+    from agent.github_api import GitHubClient
+    from agent.gitwrite import export_patch, head_sha
+    from agent.labels import PHASE6_APPLIED_LABELS
+    from agent.spec import parse_spec as parse
+    from agent.workunit import file_sha256, write_work_unit_report
+
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "--bare")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "p6@example.com")
+    _git(repo, "config", "user.name", "Phase6")
+    spec_path = repo / "spec.md"
+    spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
+    _git(repo, "add", "spec.md")
+    _git(repo, "commit", "-m", "init")
+    _git(repo, "remote", "add", "origin", str(origin))
+    base = head_sha(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.py").write_text("ok\n", encoding="utf-8")
+    report_dir = tmp_path / "report"
+    patch = report_dir / "changes.patch"
+    export_patch(repo, base, patch)
+    spec = parse(spec_path)
+    state = replace(new_execution_state(spec), state=ExecutionStatus.FINAL_VALIDATING)
+    report = _report(
+        spec_id=spec.id,
+        spec_path=str(spec_path),
+        base_sha=base,
+        branch=spec.target_branch,
+        changed_files=("src/app.py",),
+        patch_sha256=file_sha256(patch),
+        state=state,
+    )
+    write_work_unit_report(report_dir, report)
+    (repo / "src" / "app.py").unlink()
+
+    created_labels: set[str] = set()
+    calls: list[tuple[str, str]] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        calls.append((method, url))
+        if method == "GET" and "/labels/" in url:
+            name = unquote(url.rsplit("/", 1)[-1])
+            if name in created_labels:
+                return 200, {"name": name}
+            body = json.dumps({"message": "Not Found"}).encode("utf-8")
+            raise HTTPError(url, 404, "Not Found", hdrs={}, fp=BytesIO(body))
+        if method == "POST" and url.endswith("/labels") and "/issues/" not in url:
+            payload = json.loads(data or b"{}")
+            created_labels.add(str(payload["name"]))
+            return 201, payload
+        if method == "GET" and "/pulls" in url:
+            return 200, []
+        if method == "POST" and url.endswith("/pulls"):
+            return 201, {
+                "number": 12,
+                "html_url": "https://example.test/pull/12",
+                "head": {"ref": spec.target_branch},
+                "base": {"ref": spec.base_branch},
+            }
+        if method == "POST" and "/issues/" in url and url.endswith("/labels"):
+            return 200, []
+        raise AssertionError(f"unexpected GitHub call {method} {url}")
+
+    result = run_delivery(
+        spec,
+        repo_root=repo,
+        report_dir=report_dir,
+        github=GitHubClient(token="tok", repository="octo/repo", requester=requester),
+        summary_path=tmp_path / "summary.md",
+    )
+    assert result.outcome == "PR_CREATED"
+    assert result.pr_number == 12
+    assert result.code != "GITHUB_API_NETWORK"
+    assert created_labels == set(PHASE6_APPLIED_LABELS)
+    assert any(method == "POST" and url.endswith("/pulls") for method, url in calls)
     assert "feature/deliver" in _git(origin, "branch")
 
 
