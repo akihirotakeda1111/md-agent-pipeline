@@ -6,6 +6,6 @@
   {"case":"05-repair-limit","fixture":"05-repair-limit.REPAIR_LIMIT_REACHED.md","expected":"REPAIR_LIMIT_REACHED"},
   {"case":"06-environment-failure","fixture":"06-environment-failure.ENVIRONMENT_FAILURE.md","expected":"ENVIRONMENT_FAILURE"},
   {"case":"07-escalation-required","fixture":"07-escalation-required.ESCALATION_REQUIRED.md","expected":"ESCALATION_REQUIRED"},
-  {"case":"08-final-validation-failure","fixture":"08-final-validation-failure.ESCALATION_REQUIRED.md","expected":"ESCALATION_REQUIRED","deferred":true},
+  {"case":"08-final-validation-failure","fixture":"08-final-validation-failure.ESCALATION_REQUIRED.md","expected":"ESCALATION_REQUIRED","work_unit":true},
   {"case":"09-state-scope-violation","fixture":"09-state-scope-violation.SCOPE_VIOLATION.md","expected":"SCOPE_VIOLATION"}
 ]

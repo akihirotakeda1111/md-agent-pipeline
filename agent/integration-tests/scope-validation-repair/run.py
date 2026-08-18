@@ -224,21 +224,24 @@ def main():
             before = snap(workspace)
             try:
                 task = select_task(a.repo_root.resolve(), spec, state, env)
+                invoke = [
+                    sys.executable,
+                    str(here / "integration" / "invoke_phase4.py"),
+                    "--source-repo",
+                    str(a.repo_root.resolve()),
+                    "--spec",
+                    str(spec),
+                    "--task",
+                    task,
+                    "--repo-root",
+                    str(workspace),
+                    "--codex-bin",
+                    str(codex),
+                ]
+                if c.get("work_unit"):
+                    invoke.append("--work-unit")
                 r = call(
-                    [
-                        sys.executable,
-                        str(here / "integration" / "invoke_phase4.py"),
-                        "--source-repo",
-                        str(a.repo_root.resolve()),
-                        "--spec",
-                        str(spec),
-                        "--task",
-                        task,
-                        "--repo-root",
-                        str(workspace),
-                        "--codex-bin",
-                        str(codex),
-                    ],
+                    invoke,
                     a.repo_root.resolve(),
                     env,
                 )
