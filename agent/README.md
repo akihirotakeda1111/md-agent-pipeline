@@ -36,7 +36,7 @@ CodeRabbit レビューループは未実装です。
 | `scripts/deliver.py` | Commit / Push / PR / labels / summary |
 | `gitwrite.py` | Orchestrator の branch / commit / push（force 禁止） |
 | `github_api.py` | 公式 GitHub REST（PR / labels / issues） |
-| `reconcile.py` | 同一 workspace の State（あれば）と Git / PR の照合。GHA 再実行は State 無しで最初から |
+| `reconcile.py` | execute の ephemeral execution control と deliver の durable GitHub PR reconciliation。GHA 再実行は State / Git / PR を Resume に使わず最初から |
 | `delivery.py` / `workunit.py` | write job と execute report |
 | `events.py` / `summary.py` / `notify.py` | JSONL events、job summary、escalation notice |
 | `schemas/` | `task-spec.schema.json` / `execution-state.schema.json` |

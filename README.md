@@ -30,7 +30,7 @@ agent/                 Orchestrator code
   gitwrite.py / github_api.py / reconcile.py / delivery.py
   tests/
 .github/workflows/     Task Spec intake, execute, commit/PR deliver
-.agent/state/          Orchestrator-owned runtime state
+.agent/state/          Orchestrator-owned ephemeral runtime metadata
 specs/tasks/           Human-owned Task Specs
 ```
 

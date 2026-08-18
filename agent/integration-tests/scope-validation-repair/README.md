@@ -68,7 +68,7 @@ run_task_cycle(spec, repo_root=workspace, config=in-memory Fake Codex, env=secre
 
 # Case 08 only (`cases.json` work_unit + `--work-unit`)
 run_work_unit(spec, repo_root=workspace, report_dir=temp, config=in-memory Fake Codex,
-              env=secret-filtered, github=None, persist_state=False)
+              env=secret-filtered, persist_state=False)
 ```
 
 `--task` はselector overrideではありません。Phase 2 `select-task.py` が返したtask idを、Cases 01-07 / 09 では `CycleResult.task_id` と照合します。Case 08 の最終cycleは `task_id=None`（Final Verification）なので、`WorkUnitReport.completed_tasks` / `current_task` と照合します。

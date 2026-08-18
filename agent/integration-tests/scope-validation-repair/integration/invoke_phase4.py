@@ -95,7 +95,7 @@ def _work_unit_task_id(report, expected_task: str | None) -> str | None:
 
 def _payload_from_work_unit(report, *, expected_task: str | None = None) -> dict:
     payload = {
-        "ok": report.outcome in {"FINAL_VERIFICATION_PASSED", "ALREADY_DELIVERED"},
+        "ok": report.outcome == "FINAL_VERIFICATION_PASSED",
         "status": _status(report),
         "repair_attempts": report.repair_attempts,
         "task_id": _work_unit_task_id(report, expected_task),
@@ -175,7 +175,6 @@ def main() -> int:
                     report_dir=report_td,
                     config=test_config,
                     env=_safe_env(),
-                    github=None,
                     persist_state=False,
                 )
             if args.task not in report.completed_tasks and report.current_task != args.task:

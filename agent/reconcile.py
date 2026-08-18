@@ -1,10 +1,10 @@
-"""GitHub Reconciliation for delivery; local State is optional.
+"""Ephemeral execution control and durable GitHub PR reconciliation.
 
-GHA re-runs start from PENDING when `.agent/state` is absent (ephemeral).
-Durable sources are Git branch / history / Pull Request. Unsafe mismatch → ESCALATED.
-If a local state file exists (dev / same workspace), in-flight statuses are
-rewritten to the last safe checkpoint because those edges are not legal
-state-machine transitions. That is not cross-run resume.
+Execute uses prepare_execution_state. That path does not checkout a feature
+branch, does not treat git history as Resume, and does not inspect GitHub PRs.
+
+Deliver uses reconcile_open_pull. Durable sources are GitHub pull requests
+identified by spec_id + head + base + work-unit marker.
 """
 
 from __future__ import annotations
@@ -15,13 +15,7 @@ from typing import Any
 
 from agent.errors import AgentError
 from agent.github_api import GitHubClient
-from agent.gitutil import capture_snapshot
-from agent.gitwrite import (
-    branch_exists_locally,
-    commits_ahead_of,
-    prepare_feature_worktree,
-    remote_branch_sha,
-)
+from agent.pr import is_same_work_unit_pull
 from agent.spec import TaskSpec
 from agent.state import (
     ExecutionState,
@@ -48,15 +42,16 @@ class ReconcileResult:
     action: str
     state: ExecutionState
     reason: str
-    pull: dict[str, Any] | None = None
 
     @property
     def should_run_codex(self) -> bool:
         return self.action in {"continue", "retry"}
 
-    @property
-    def already_delivered(self) -> bool:
-        return self.action == "skip"
+
+@dataclass(frozen=True)
+class OpenPullReconcile:
+    action: str
+    pull: dict[str, Any] | None
 
 
 def load_state_or_new(spec: TaskSpec, repo_root: Path | str) -> ExecutionState:
@@ -66,28 +61,55 @@ def load_state_or_new(spec: TaskSpec, repo_root: Path | str) -> ExecutionState:
     return new_execution_state(spec)
 
 
-def reconcile_work_unit(
+def prepare_execution_state(
     spec: TaskSpec,
     repo_root: Path | str,
     *,
-    github: GitHubClient | None = None,
-    persist_state: bool = True,
+    persist_state: bool = False,
 ) -> ReconcileResult:
+    """Load in-run Execution State. GitHub Actions uses persist_state=False."""
     root = Path(repo_root)
-    prepare_feature_worktree(root, spec.target_branch)
-    state = load_state_or_new(spec, root)
-    result = _reconcile(spec, root, state, github)
-    if persist_state:
-        write_state(state_file_path(root, spec.id), result.state)
+    if not persist_state:
+        return ReconcileResult(
+            "continue",
+            new_execution_state(spec),
+            "ephemeral start from the beginning",
+        )
+    path = state_file_path(root, spec.id)
+    if not path.exists():
+        state = new_execution_state(spec)
+        write_state(path, state)
+        return ReconcileResult("continue", state, "initialized ephemeral execution state")
+    state = read_state(path)
+    result = _prepare_persisted_state(spec, state)
+    write_state(path, result.state)
     return result
 
 
-def _reconcile(
-    spec: TaskSpec,
-    root: Path,
-    state: ExecutionState,
-    github: GitHubClient | None,
-) -> ReconcileResult:
+def reconcile_open_pull(spec: TaskSpec, github: GitHubClient) -> OpenPullReconcile:
+    """Reuse a same-work-unit open PR or allow a new delivery.
+
+    Same branch alone is not enough. spec_id, head.ref, base.ref, and the
+    work-unit marker must all match.
+    """
+    pulls = github.list_open_pulls(head_branch=spec.target_branch)
+    if len(pulls) > 1:
+        raise AgentError.escalation_required(
+            f"multiple open pull requests for {spec.target_branch}",
+            code="UNSAFE_RECONCILE",
+        )
+    if not pulls:
+        return OpenPullReconcile("create", None)
+    pull = pulls[0]
+    if not is_same_work_unit_pull(spec, pull):
+        raise AgentError.escalation_required(
+            "open pull request on the target branch is not the same work unit",
+            code="WORK_UNIT_PR_MISMATCH",
+        )
+    return OpenPullReconcile("reuse", pull)
+
+
+def _prepare_persisted_state(spec: TaskSpec, state: ExecutionState) -> ReconcileResult:
     if state.task_id != spec.id:
         raise AgentError.escalation_required(
             f"state taskId {state.task_id} does not match spec {spec.id}",
@@ -99,104 +121,41 @@ def _reconcile(
             f"{spec.target_branch!r}",
             code="STATE_BRANCH_MISMATCH",
         )
-
-    local_branch = branch_exists_locally(root, spec.target_branch)
-    remote_sha = remote_branch_sha(root, spec.target_branch)
-    branch_present = local_branch or remote_sha is not None
-    ahead: tuple[str, ...] = ()
-    if branch_present:
-        head_ref = spec.target_branch if local_branch else f"origin/{spec.target_branch}"
-        ahead = commits_ahead_of(root, f"origin/{spec.base_branch}", head_ref)
-        if not ahead:
-            ahead = commits_ahead_of(root, spec.base_branch, head_ref)
-
-    pull = _unique_open_pull(github, spec.target_branch)
-
     if state.state is ExecutionStatus.ESCALATED:
-        return ReconcileResult(
-            "block", state, "execution is ESCALATED; human action required", pull
-        )
+        return ReconcileResult("block", state, "execution is ESCALATED; human action required")
     if state.state is ExecutionStatus.SCOPE_VIOLATION:
-        return ReconcileResult("block", state, "SCOPE_VIOLATION is not auto-retried", pull)
+        return ReconcileResult("block", state, "SCOPE_VIOLATION is not auto-retried")
     if state.state is ExecutionStatus.INVALID_SPEC:
-        return ReconcileResult("block", state, "INVALID_SPEC is not auto-retried", pull)
-
-    if pull is not None:
-        return _reconcile_existing_pull(state, pull)
-
-    if state.state is ExecutionStatus.PR_CREATED and github is not None:
-        raise AgentError.escalation_required(
-            "state is PR_CREATED but no open pull request exists for the feature branch",
-            code="STATE_PR_MISMATCH",
+        return ReconcileResult("block", state, "INVALID_SPEC is not auto-retried")
+    if state.state is ExecutionStatus.COMPLETED:
+        return ReconcileResult("block", state, "COMPLETED is not auto-retried")
+    if state.state is ExecutionStatus.PR_CREATED:
+        return ReconcileResult(
+            "continue",
+            new_execution_state(spec),
+            "ephemeral start; existing PR reuse is deliver-side",
         )
-
     if state.state is ExecutionStatus.FAILED:
         return ReconcileResult(
             "retry",
             apply_transition(state, ExecutionStatus.RUNNING),
             "retrying FAILED work unit",
-            pull,
         )
-
     if state.state in IN_FLIGHT:
-        recovered = _recover_in_flight(state)
-        return ReconcileResult("continue", recovered, "recovered interrupted execution", pull)
-
-    if state.completed_tasks and not branch_present and not ahead:
-        snapshot = capture_snapshot(root)
-        if not snapshot.dirty:
-            raise AgentError.escalation_required(
-                "state lists completed tasks but the feature branch has no corresponding commits",
-                code="STATE_COMMIT_MISMATCH",
-            )
-
-    if state.state is ExecutionStatus.PENDING and not state.completed_tasks and ahead:
-        raise AgentError.escalation_required(
-            "feature branch has commits but execution state is still PENDING",
-            code="STATE_GIT_MISMATCH",
+        return ReconcileResult(
+            "continue",
+            _recover_in_flight(state),
+            "recovered interrupted execution",
         )
-
-    return ReconcileResult("continue", state, "state is consistent with git", pull)
-
-
-def _unique_open_pull(github: GitHubClient | None, branch: str) -> dict[str, Any] | None:
-    if github is None:
-        return None
-    pulls = github.list_open_pulls(head_branch=branch)
-    if len(pulls) > 1:
-        raise AgentError.escalation_required(
-            f"multiple open pull requests for {branch}",
-            code="UNSAFE_RECONCILE",
-        )
-    return pulls[0] if pulls else None
-
-
-def _reconcile_existing_pull(state: ExecutionState, pull: dict[str, Any]) -> ReconcileResult:
-    number = pull.get("number")
-    if state.state is ExecutionStatus.PR_CREATED:
-        if state.pull_request not in {None, "", number, str(number)}:
-            raise AgentError.escalation_required(
-                f"state pullRequest {state.pull_request!r} does not match open PR {number!r}",
-                code="STATE_PR_MISMATCH",
-            )
-        updated = (
-            state
-            if state.pull_request in {number, str(number)}
-            else replace(
-                state, pull_request=number if isinstance(number, int) else state.pull_request
-            )
-        )
-        return ReconcileResult("skip", updated, "pull request already exists", pull)
-    if state.state is ExecutionStatus.FINAL_VALIDATING:
-        adopted = apply_transition(state, ExecutionStatus.PR_CREATED, pull_request=number)
-        return ReconcileResult("skip", adopted, "adopted existing pull request", pull)
-    raise AgentError.escalation_required(
-        "open pull request exists but execution state is not PR_CREATED",
-        code="STATE_PR_MISMATCH",
-    )
+    return ReconcileResult("continue", state, "ephemeral execution state is consistent")
 
 
 def _recover_in_flight(state: ExecutionState) -> ExecutionState:
+    """Crash recovery for local persist_state=True. Not cross-run GHA Resume.
+
+    In-flight statuses have no legal edge back to a checkpoint, so this rewrite
+    is local execution control rather than a state-machine transition.
+    """
     if state.state is ExecutionStatus.FINAL_VALIDATING:
         return state
     if state.completed_tasks:

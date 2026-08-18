@@ -39,7 +39,8 @@ from agent.gitwrite import (
 from agent.labels import apply_status_label, ensure_agent_labels
 from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error
-from agent.pr import build_pr_body, build_pr_title, is_same_work_unit_pull
+from agent.pr import build_pr_body, build_pr_title
+from agent.reconcile import reconcile_open_pull
 from agent.scope import check_scope
 from agent.spec import TaskSpec, parse_spec
 from agent.summary import render_summary, write_github_summary
@@ -196,19 +197,10 @@ def _deliver(
     assert_report_matches_spec(spec, report, root)
     assert_patch_digest(report_dir, report)
     ensure_agent_labels(github)
-    existing = github.list_open_pulls(head_branch=spec.target_branch)
-    if len(existing) > 1:
-        raise AgentError.escalation_required(
-            f"multiple open pull requests for {spec.target_branch}",
-            code="UNSAFE_RECONCILE",
-        )
-    if existing:
-        pull = existing[0]
-        if not is_same_work_unit_pull(spec, pull):
-            raise AgentError.escalation_required(
-                "open pull request on the target branch is not the same work unit",
-                code="WORK_UNIT_PR_MISMATCH",
-            )
+    existing = reconcile_open_pull(spec, github)
+    if existing.action == "reuse":
+        pull = existing.pull
+        assert pull is not None
         number = int(pull["number"])
         url = str(pull.get("html_url") or "")
         apply_status_label(github, number, "agent:ready")
@@ -220,7 +212,6 @@ def _deliver(
             notice=None,
             summary="",
             message="reused existing pull request",
-            code=None,
         )
 
     if (
@@ -301,10 +292,10 @@ def _deliver(
     except AgentError as exc:
         if exc.code != "GITHUB_API_VALIDATION":
             raise
-        existing_after = github.list_open_pulls(head_branch=spec.target_branch)
-        if not existing_after or not is_same_work_unit_pull(spec, existing_after[0]):
+        raced = reconcile_open_pull(spec, github)
+        if raced.action != "reuse" or raced.pull is None:
             raise
-        created = existing_after[0]
+        created = raced.pull
     number = int(created["number"])
     url = str(created.get("html_url") or "")
     apply_status_label(github, number, "agent:ready")

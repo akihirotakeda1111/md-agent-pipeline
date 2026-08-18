@@ -22,10 +22,9 @@ from agent.events import (
     WORKFLOW_COMPLETED,
     emit,
 )
-from agent.github_api import GitHubClient
 from agent.gitutil import capture_snapshot, change_path_list, collect_changes
 from agent.gitwrite import export_patch, head_sha
-from agent.reconcile import ReconcileResult, load_state_or_new, reconcile_work_unit
+from agent.reconcile import ReconcileResult, load_state_or_new, prepare_execution_state
 from agent.spec import TaskSpec, parse_spec
 from agent.state import ExecutionState, new_execution_state
 
@@ -126,7 +125,6 @@ def run_work_unit(
     config: AgentConfig | None = None,
     env: Mapping[str, str] | None = None,
     executor: Any | None = None,
-    github: GitHubClient | None = None,
     persist_state: bool = False,
 ) -> WorkUnitReport:
     cfg = config or load_config()
@@ -135,18 +133,17 @@ def run_work_unit(
     emit(SPEC_DISCOVERED, "task spec discovered", task_id=parsed.id, state="PENDING")
     emit(SPEC_VALIDATED, "task spec is valid", task_id=parsed.id, state="PENDING")
     try:
-        reconciled = reconcile_work_unit(parsed, root, github=github, persist_state=persist_state)
+        reconciled = prepare_execution_state(parsed, root, persist_state=persist_state)
     except AgentError as exc:
         snapshot = capture_snapshot(root)
         try:
-            state = load_state_or_new(parsed, root)
+            state = (
+                load_state_or_new(parsed, root) if persist_state else new_execution_state(parsed)
+            )
         except Exception:
             state = new_execution_state(parsed)
         escalate_codes = {
-            "STATE_GIT_MISMATCH",
             "STATE_BRANCH_MISMATCH",
-            "STATE_PR_MISMATCH",
-            "STATE_COMMIT_MISMATCH",
             "UNSAFE_RECONCILE",
         }
         report = WorkUnitReport(
@@ -176,16 +173,6 @@ def run_work_unit(
         state=reconciled.state.state.value,
     )
     snapshot = capture_snapshot(root)
-    if reconciled.already_delivered:
-        report = _report_from_reconcile(parsed, snapshot.base_sha, reconciled, "ALREADY_DELIVERED")
-        _export_and_write(root, snapshot.base_sha, report_dir, report)
-        emit(
-            WORKFLOW_COMPLETED,
-            "existing pull request reused",
-            task_id=parsed.id,
-            state=report.state.state.value,
-        )
-        return report
     if reconciled.action == "block":
         report = _report_from_reconcile(
             parsed, snapshot.base_sha, reconciled, reconciled.state.state.value
@@ -296,8 +283,8 @@ def _report_from_reconcile(
         changed_files=(),
         validation_results=(),
         repair_attempts=reconciled.state.repair_attempts,
-        final_verification_passed=reconciled.already_delivered,
-        validation_passed=reconciled.already_delivered,
+        final_verification_passed=False,
+        validation_passed=False,
         scope_allowed=True,
         message=reconciled.reason,
         current_task=reconciled.state.current_task,

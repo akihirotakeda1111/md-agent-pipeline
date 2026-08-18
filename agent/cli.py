@@ -350,11 +350,11 @@ def run_work_unit_cli(argv: Sequence[str] | None = None) -> int:
         report = run_work_unit(args.spec, repo_root=args.repo_root, report_dir=args.report_dir)
         _print_json(
             {
-                "ok": report.final_verification_passed or report.outcome == "ALREADY_DELIVERED",
+                "ok": report.final_verification_passed,
                 **report.to_json_dict(),
             }
         )
-        if report.outcome in {"FINAL_VERIFICATION_PASSED", "ALREADY_DELIVERED"}:
+        if report.outcome == "FINAL_VERIFICATION_PASSED":
             return EXIT_OK
         if report.outcome == "SCOPE_VIOLATION":
             return EXIT_POLICY

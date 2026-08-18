@@ -63,6 +63,9 @@ Review classifierの結果は必ず通常コードのPolicy Engineを通す。
 
 再開にCursor/Codexの過去会話を必要としない。
 
+GitHub Actions再実行は Execution State JSON をResumeソースにしない。
+durableな既存PR再利用はdeliver側のGitHub reconciliationが担当する。
+
 ## I-12 — External Syntax Is Verified
 
 Codex CLI / GitHub Actions / OpenAI API / CodeRabbitの

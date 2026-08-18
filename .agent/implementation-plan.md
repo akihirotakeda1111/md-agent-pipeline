@@ -18,7 +18,7 @@ Scope Check・Validation・Repair・Commit・PR・CodeRabbitレビュー修正�
 | 3 | Codex CLI Runner | 2 | Codexを制限されたImplementation Engineとして起動 |
 | 4 | Scope, Validation & Repair | 3 | Git差分制約・Validation・Repair Loop |
 | 5 | GitHub Actions Execution | 4 | MD投入からTask単位で安全に実行 |
-| 6 | Git, PR, Resume & Observability | 5 | Commit/Push/PR・再開・可観測性 |
+| 6 | Git, PR, Restart / GitHub Reconciliation & Observability | 5 | Commit/Push/PR・Restart / GitHub Reconciliation・可観測性 |
 | 7 | CodeRabbit Review Loop | 6 | 非同期レビュー分類・Codex修正ループ |
 
 ---
@@ -96,7 +96,7 @@ Codex Repair
 - [ ] Phase 3 — Codex CLI Runner
 - [ ] Phase 4 — Scope, Validation & Repair
 - [ ] Phase 5 — GitHub Actions Execution
-- [ ] Phase 6 — Git, PR, Resume & Observability
+- [ ] Phase 6 — Git, PR, Restart / GitHub Reconciliation & Observability
 - [ ] Phase 7 — CodeRabbit Review Loop
 
 ---

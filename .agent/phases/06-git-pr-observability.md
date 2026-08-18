@@ -269,12 +269,27 @@ mention先はconfigurable。
 
 ## Restart / GitHub Reconciliation
 
+判定は次の2種類に分ける。
+
+```text
+ephemeral execution control  → execute
+durable GitHub reconciliation → deliver
+```
+
+### Execute — ephemeral execution control
+
 実行中のExecution State JSONはGitHub-hosted runner上でephemeralとする。
 
 GitHub Actions再実行時はwork unitを途中からResumeせず、
 Task Specから最初から再実行する。
 
+executeはGit branch / commit / Pull RequestをResumeのSource of Truthにしない。
+既存PRがあること、feature branchにcommitがあることを理由に
+Codexをskipしたり、既存branchへcheckoutして続きから再開したりしない。
+
 過去のCodex会話やExecution StateをSource of Truthにしない。
+
+### Deliver — durable GitHub reconciliation
 
 Durableな照合対象はGitHub上に既に存在する外部状態とする。
 
@@ -425,6 +440,7 @@ Escalation Reason
 - patch digest mismatch blocks delivery
 - patch manifest mismatch blocks delivery
 - restart from missing ephemeral state starts work unit from the beginning
+- execute ignores leftover `.agent/state` and existing Git/PR when persist_state is false
 - reuse existing pull request only for the same work unit
 - failed vs escalated policy
 - escalation notification payload

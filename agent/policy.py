@@ -1,4 +1,4 @@
-"""FAILED vs ESCALATED policy for Git / PR / resume outcomes."""
+"""FAILED vs ESCALATED policy for Git / PR / GitHub reconciliation outcomes."""
 
 from __future__ import annotations
 

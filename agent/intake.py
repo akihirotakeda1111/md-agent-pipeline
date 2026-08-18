@@ -1,6 +1,7 @@
-"""GitHub Actions intake helpers: spec parse, loop prevention, history, state guard.
+"""GitHub Actions intake helpers: spec parse, loop prevention, history, ephemeral state guard.
 
 This module does not commit, push, create branches, or open pull requests.
+Execution State guard is local ephemeral control, not GHA Resume.
 """
 
 from __future__ import annotations
@@ -207,6 +208,11 @@ def execution_guard_reason(
     *,
     config: AgentConfig | None = None,
 ) -> str | None:
+    """Block local leftover terminal states. Missing state always allows start.
+
+    This is ephemeral execution control. It does not inspect GitHub PRs or git
+    history, and GitHub Actions re-runs do not use the file as Resume state.
+    """
     path = state_file_path(repo_root, spec.id, config=config)
     if not path.exists():
         return None

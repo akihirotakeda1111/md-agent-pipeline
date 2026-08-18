@@ -10,7 +10,7 @@ PR作成後に非同期で発生するCodeRabbit feedbackを検知し、
 
 ## Depends On
 
-Phase 6 — Git, Pull Request, Resume & Observability
+Phase 6 — Git, Pull Request, Restart / GitHub Reconciliation & Observability
 
 ---
 

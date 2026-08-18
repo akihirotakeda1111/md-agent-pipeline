@@ -14,7 +14,7 @@
 # - deliver has contents/pull-requests/issues write and GITHUB_TOKEN. No CODEX_API_KEY.
 # - Both jobs use persist-credentials: false so Final Verification and other
 #   repository-controlled processes cannot reach stored git write credentials.
-# - git push injects HTTPS auth into the Orchestrator git subprocess only.
+# - Deliver injects HTTPS auth into the Orchestrator git subprocess only.
 # - Codex subprocess never receives GitHub write credentials.
 #
 # Concurrency contract:

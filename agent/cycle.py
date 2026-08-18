@@ -142,8 +142,7 @@ def run_task_cycle(
     elif persist_state:
         current = load_or_init_state(parsed, root, config=cfg)
     else:
-        path = state_file_path(root, parsed.id, config=cfg)
-        current = read_state(path) if path.exists() else new_execution_state(parsed)
+        current = new_execution_state(parsed)
     selected = select_next_task(parsed, current)
     if selected is None:
         return _final_verify_if_ready(parsed, current, root, cfg, rest_env, persist_state)

@@ -11,7 +11,7 @@ from agent.errors import AgentError
 from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error
 from agent.pr import build_pr_body, build_pr_title
-from agent.reconcile import reconcile_work_unit
+from agent.reconcile import prepare_execution_state
 from agent.spec import parse_spec
 from agent.state import (
     ExecutionStatus,
@@ -176,7 +176,7 @@ def test_summary_rendering(tmp_path: Path) -> None:
     assert "https://github.com/example/repo/pull/3" in path.read_text(encoding="utf-8")
 
 
-def test_state_commit_mismatch(tmp_path: Path) -> None:
+def test_gha_execute_ignores_leftover_state_without_commits(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     import subprocess
@@ -203,12 +203,13 @@ def test_state_commit_mismatch(tmp_path: Path) -> None:
         last_result="PASSED",
     )
     write_state(state_file_path(repo, spec.id), state)
-    with pytest.raises(AgentError) as exc_info:
-        reconcile_work_unit(spec, repo, github=None)
-    assert exc_info.value.code == "STATE_COMMIT_MISMATCH"
+    result = prepare_execution_state(spec, repo, persist_state=False)
+    assert result.action == "continue"
+    assert result.state.state is ExecutionStatus.PENDING
+    assert result.state.completed_tasks == ()
 
 
-def test_state_branch_mismatch(tmp_path: Path) -> None:
+def test_local_persisted_state_branch_mismatch(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     import subprocess
@@ -227,11 +228,11 @@ def test_state_branch_mismatch(tmp_path: Path) -> None:
     state = new_execution_state(spec)
     write_state(state_file_path(repo, spec.id), replace(state, branch="feature/wrong"))
     with pytest.raises(AgentError) as exc_info:
-        reconcile_work_unit(spec, repo, github=None)
+        prepare_execution_state(spec, repo, persist_state=True)
     assert exc_info.value.code == "STATE_BRANCH_MISMATCH"
 
 
-def test_resume_from_valid_state(tmp_path: Path) -> None:
+def test_local_ephemeral_state_continues(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     import subprocess
@@ -248,12 +249,13 @@ def test_resume_from_valid_state(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
     spec = parse_spec(EXAMPLE_SPEC)
     write_state(state_file_path(repo, spec.id), new_execution_state(spec))
-    result = reconcile_work_unit(spec, repo, github=None)
+    result = prepare_execution_state(spec, repo, persist_state=True)
     assert result.action == "continue"
     assert result.should_run_codex is True
+    assert result.state.state is ExecutionStatus.PENDING
 
 
-def test_resume_from_failed_state(tmp_path: Path) -> None:
+def test_local_failed_state_retries(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     import subprocess
@@ -272,7 +274,7 @@ def test_resume_from_failed_state(tmp_path: Path) -> None:
     running = apply_transition(new_execution_state(spec), ExecutionStatus.RUNNING)
     failed = apply_transition(running, ExecutionStatus.FAILED)
     write_state(state_file_path(repo, spec.id), failed)
-    result = reconcile_work_unit(spec, repo, github=None)
+    result = prepare_execution_state(spec, repo, persist_state=True)
     assert result.action == "retry"
     assert result.state.state is ExecutionStatus.RUNNING
 
@@ -370,6 +372,35 @@ class _FakeGitHub:
     def create_issue_comment(self, issue_number: int, body: str) -> dict[str, object]:
         self.comments.append((issue_number, body))
         return {"id": 1}
+
+
+def test_reconcile_open_pull_reuses_same_work_unit_only() -> None:
+    from agent.reconcile import reconcile_open_pull
+
+    spec = parse_spec(EXAMPLE_SPEC)
+    reused = reconcile_open_pull(spec, _FakeGitHub(pulls=[_work_unit_pull(spec)]))  # type: ignore[arg-type]
+    assert reused.action == "reuse"
+    assert reused.pull is not None
+    assert reused.pull["number"] == 7
+    created = reconcile_open_pull(spec, _FakeGitHub())  # type: ignore[arg-type]
+    assert created.action == "create"
+    assert created.pull is None
+    with pytest.raises(AgentError) as exc_info:
+        reconcile_open_pull(
+            spec,
+            _FakeGitHub(  # type: ignore[arg-type]
+                pulls=[
+                    {
+                        "number": 7,
+                        "html_url": "https://example.test/pull/7",
+                        "head": {"ref": spec.target_branch},
+                        "base": {"ref": spec.base_branch},
+                        "body": "manual PR",
+                    }
+                ]
+            ),
+        )
+    assert exc_info.value.code == "WORK_UNIT_PR_MISMATCH"
 
 
 def test_delivery_reuses_existing_pull_request(
@@ -920,7 +951,23 @@ def test_missing_ephemeral_state_restarts_work_unit(tmp_path: Path) -> None:
     _git(repo, "add", "spec.md")
     _git(repo, "commit", "-m", "init")
     spec = parse_spec(spec_path)
-    assert not state_file_path(repo, spec.id).exists()
+    leftover = apply_transition(
+        apply_transition(new_execution_state(spec), ExecutionStatus.RUNNING, current_task="task-1"),
+        ExecutionStatus.IMPLEMENTING,
+    )
+    leftover = apply_transition(
+        apply_transition(leftover, ExecutionStatus.VALIDATING),
+        ExecutionStatus.TASK_COMPLETED,
+        completed_tasks=["task-1"],
+        last_result="PASSED",
+    )
+    write_state(state_file_path(repo, spec.id), leftover)
+    _git(repo, "checkout", "-b", spec.target_branch)
+    (repo / "src").mkdir()
+    (repo / "src" / "previous.py").write_text("old\n", encoding="utf-8")
+    _git(repo, "add", "src/previous.py")
+    _git(repo, "commit", "-m", "previous delivery")
+    _git(repo, "checkout", "main")
     started: list[str] = []
 
     def executor(*_args: object, cwd: str, **_kwargs: object) -> ProcessResult:
@@ -941,7 +988,8 @@ def test_missing_ephemeral_state_restarts_work_unit(tmp_path: Path) -> None:
     assert started
     assert report.completed_tasks == ("task-1",)
     assert report.outcome == "FINAL_VERIFICATION_PASSED"
-    assert not state_file_path(repo, spec.id).exists()
+    assert report.current_task == "task-1"
+    assert (repo / "src" / "app.py").is_file()
 
 
 def test_work_unit_report_keeps_repair_attempts_after_final_verification(tmp_path: Path) -> None:

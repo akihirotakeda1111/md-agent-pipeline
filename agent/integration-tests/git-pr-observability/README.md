@@ -45,12 +45,13 @@ git-pr-observability/
 ## Production 経路
 
 ```text
-execute
+execute  # ephemeral execution control
 Task Spec -> Task Selection -> Codex -> Scope -> Validation -> bounded Repair
 -> all Tasks -> Final Verification -> report.json + changes.patch
+Git / PR を Resume に使わない。既存 PR があっても Codex を skip しない。
 
-deliver
-report/Spec 照合 -> digest -> GitHub reconciliation -> base/clean
+deliver  # durable GitHub reconciliation
+report/Spec 照合 -> digest -> GitHub PR reconciliation -> base/clean
 -> apply -> 実 Git diff -> Scope -> manifest -> Final Verification
 -> commit -> push -> Pull Request
 ```
@@ -63,7 +64,7 @@ workflow YAML は構造解析のみです。execute は `contents: read` と `CO
 
 | IDs | Area | 主な確認 |
 |---|---|---|
-| 01〜05 | work unit | 複数 Task 順、memory state、欠落 state からの Task 1 再開、bounded Repair、Scope |
+| 01〜05 | work unit | 複数 Task 順、memory state、欠落 / leftover state からの Task 1 再実行、bounded Repair、Scope |
 | 06〜18 | delivery | happy path の commit/push/PR、binding mismatch、manifest、deliver 側 FV |
 | 19〜23 | git safety | dirty tree、force/amend/rebase/history rewrite なし（実 Git graph） |
 | 24〜28 | reconciliation | 同一 work unit PR の reuse、不正 marker / head / base は reuse しない |

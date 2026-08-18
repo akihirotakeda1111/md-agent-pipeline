@@ -112,10 +112,10 @@ Branch存在確認だけをmutexとして扱わない。
 GitHub Actions task-level concurrency
 
 ### Layer 2
-Execution State guard
+Execution State guard（ephemeral execution control。GHA再実行のResumeソースではない）
 
 ### Layer 3
-Git / branch / PR reconciliation
+Git / branch / PR reconciliation（Phase 6のdeliver側 durable GitHub reconciliation）
 
 を用意する。
 
@@ -123,7 +123,7 @@ Git / branch / PR reconciliation
 
 ## Git Checkout / History
 
-Scope Check、resume、merge-base、reconciliationに必要なcommit/refを
+Scope Check、merge-base、deliver側 GitHub reconciliation に必要なcommit/refを
 ローカルに確実に取得する。
 
 MVPではfull history checkoutでもよい。
