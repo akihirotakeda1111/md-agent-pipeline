@@ -101,6 +101,14 @@ python agent/integration-tests/github-actions/integration/verify_contract.py
 python agent/integration-tests/github-actions/run.py --repo OWNER/REPO
 ```
 
+### Phase 6 — Git / PR / Observability
+
+通常のIntegration TestではFake CodexとFake GitHubを使用し、APIコストやネットワーク依存を発生させません。実Git（一時repository）でCommit / Push / PR / Reconciliationを検証します。Real CodexとReal GitHub Actionsは起動しません。
+
+```bash
+python agent/integration-tests/git-pr-observability/run.py
+```
+
 ## Spec / state CLIs
 
 ```text
