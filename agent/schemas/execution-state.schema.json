@@ -58,7 +58,11 @@
         "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
       }
     },
-    "repairAttempts": { "type": "integer", "minimum": 0 },
+    "repairAttempts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-unit cumulative Codex repair count. Not reset when advancing to the next task. Shared with WorkUnitReport, PR body, and Job Summary."
+    },
     "reviewAttempts": { "type": "integer", "minimum": 0 },
     "lastValidation": { "type": ["string", "null"] },
     "lastResult": {

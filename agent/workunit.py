@@ -251,7 +251,7 @@ def run_work_unit(
         completed_tasks=last.state.completed_tasks,
         changed_files=changed,
         validation_results=tuple(validations),
-        repair_attempts=last.repair_attempts,
+        repair_attempts=last.state.repair_attempts,
         final_verification_passed=last.outcome == "FINAL_VERIFICATION_PASSED",
         validation_passed=last.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"},
         scope_allowed=last.scope.allowed

@@ -841,6 +841,52 @@ def test_missing_ephemeral_state_restarts_work_unit(tmp_path: Path) -> None:
     assert not state_file_path(repo, spec.id).exists()
 
 
+def test_work_unit_report_keeps_repair_attempts_after_final_verification(tmp_path: Path) -> None:
+    from agent.codex_runner import ProcessResult
+    from agent.workunit import run_work_unit
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "p6@example.com")
+    _git(repo, "config", "user.name", "Phase6")
+    spec_path = repo / "spec.md"
+    spec_path.write_text(
+        DELIVER_SPEC.replace('python -c "print(1)"', "python check.py"),
+        encoding="utf-8",
+    )
+    (repo / "check.py").write_text(
+        "from pathlib import Path\nraise SystemExit(0 if Path('src/app.py').is_file() else 1)\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "spec.md", "check.py")
+    _git(repo, "commit", "-m", "init")
+    calls = {"n": 0}
+
+    def executor(*_args: object, cwd: str, **_kwargs: object) -> ProcessResult:
+        calls["n"] += 1
+        dest = Path(cwd) / "src" / "app.py"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if calls["n"] > 1:
+            dest.write_text("ok\n", encoding="utf-8")
+        return ProcessResult(0, "done", "")
+
+    report_dir = tmp_path / "out"
+    report = run_work_unit(
+        spec_path,
+        repo_root=repo,
+        report_dir=report_dir,
+        persist_state=False,
+        env=_path_env(),
+        executor=executor,
+    )
+    assert report.outcome == "FINAL_VERIFICATION_PASSED"
+    assert report.repair_attempts == 1
+    payload = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+    assert payload["repair_attempts"] == 1
+    assert payload["state"]["repairAttempts"] == 1
+
+
 def test_deliver_final_verification_failure_does_not_git_write(tmp_path: Path) -> None:
     from agent.delivery import run_delivery
     from agent.gitwrite import export_patch, head_sha

@@ -224,6 +224,7 @@ def _final_verify_if_ready(
             task_id=None,
             base_sha=None,
             state=current,
+            repair_attempts=current.repair_attempts,
             message="no selectable task",
         )
     emit(
@@ -244,6 +245,7 @@ def _final_verify_if_ready(
             base_sha=None,
             state=current,
             validations=records,
+            repair_attempts=current.repair_attempts,
             message="final verification passed",
         )
     classification = classify_validation(failed)
@@ -268,6 +270,7 @@ def _final_verify_if_ready(
         state=current,
         validations=records,
         classification=classification,
+        repair_attempts=current.repair_attempts,
         message="final verification failed",
     )
 

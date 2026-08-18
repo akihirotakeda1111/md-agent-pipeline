@@ -40,7 +40,11 @@
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     },
-    "repair_attempt_limit": { "type": "integer", "minimum": 0 },
+    "repair_attempt_limit": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-unit budget for Codex repairs across all tasks. Shared with ExecutionState.repairAttempts; not a per-task limit."
+    },
     "review_attempt_limit": { "type": "integer", "minimum": 0 },
     "objective": { "type": "string", "minLength": 1 },
     "non_goals": { "type": "string", "minLength": 1 },
