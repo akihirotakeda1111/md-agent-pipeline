@@ -104,6 +104,5 @@ github-actions/
 
 - dispatch-normal（execute は 01 で証明）
 - dispatch-invalid（parse 失敗は 02 で証明）
-- Commit / Push / Pull Request
-- Restart / GitHub Reconciliation
+- Commit / Push / Pull Request と Restart / GitHub Reconciliation の Real GitHub 確認は `agent/integration-tests/github-pr-e2e/`
 - CodeRabbit
