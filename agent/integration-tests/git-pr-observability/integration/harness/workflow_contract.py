@@ -43,12 +43,17 @@ def checkout_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         step
         for step in job.get("steps", [])
-        if isinstance(step, dict) and str(step.get("uses", "")).lower().startswith("actions/checkout@")
+        if isinstance(step, dict)
+        and str(step.get("uses", "")).lower().startswith("actions/checkout@")
     ]
 
 
 def codex_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
-    return [step for step in job.get("steps", []) if isinstance(step, dict) and contains_reference(step, "codex")]
+    return [
+        step
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and contains_reference(step, "codex")
+    ]
 
 
 def is_false(value: Any) -> bool:

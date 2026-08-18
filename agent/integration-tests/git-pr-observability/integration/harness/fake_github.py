@@ -9,7 +9,9 @@ from .observations import ObservationLog
 class FakeGitHub:
     """Records API requests and returns configured values without making decisions."""
 
-    def __init__(self, observations: ObservationLog, responses: dict[str, list[Any]] | None = None) -> None:
+    def __init__(
+        self, observations: ObservationLog, responses: dict[str, list[Any]] | None = None
+    ) -> None:
         self.observations = observations
         self.responses = {name: list(values) for name, values in (responses or {}).items()}
 

@@ -12,14 +12,19 @@ def test_29_temporary_environment_failure_is_failed(
 ):
     services = service_factory(
         codex_steps=[CodexStep(exit_code=75, final_message="could not resolve host")],
-        github_responses={"create_issue": [{"number": 1, "html_url": "https://example.invalid/issues/1"}]},
+        github_responses={
+            "create_issue": [{"number": 1, "html_url": "https://example.invalid/issues/1"}]
+        },
     )
     result = phase6_driver.run_phase6_flow(
         Phase6FlowRequest(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
         ),
         services,
     )
@@ -47,11 +52,15 @@ def test_31_pr_present_escalation_comments_and_labels(
     existing = github_fixture("existing-wrong-marker.json")
     services = service_factory(github_responses={"list_pull_requests": [[existing], [existing]]})
     phase6_driver.deliver(
-        delivery_request(spec_path, git_repo, artifact_factory(spec_path), mention="@configured-reviewer"),
+        delivery_request(
+            spec_path, git_repo, artifact_factory(spec_path), mention="@configured-reviewer"
+        ),
         services,
     )
     assert services.github.calls("add_pr_comment")
-    assert any("agent:escalated" in json.dumps(call) for call in services.github.calls("set_labels"))
+    assert any(
+        "agent:escalated" in json.dumps(call) for call in services.github.calls("set_labels")
+    )
 
 
 def test_32_no_pr_escalation_uses_issue_or_documented_notification_route(
@@ -131,14 +140,19 @@ def test_production_failed_flow_publishes_notification_label_and_summary(
 ):
     services = service_factory(
         codex_steps=[CodexStep(exit_code=75, final_message="could not resolve host")],
-        github_responses={"create_issue": [{"number": 1, "html_url": "https://example.invalid/issues/1"}]},
+        github_responses={
+            "create_issue": [{"number": 1, "html_url": "https://example.invalid/issues/1"}]
+        },
     )
     result = phase6_driver.run_phase6_flow(
         Phase6FlowRequest(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
             notification_mention="@configured-reviewer",
         ),
         services,
@@ -167,7 +181,10 @@ def test_production_unsafe_reconciliation_flow_escalates_comments_labels_and_sum
 ):
     existing = github_fixture("existing-wrong-marker.json")
     services = service_factory(
-        codex_steps=[CodexStep({"app/task-1.txt": "one\n"}), CodexStep({"app/task-2.txt": "two\n"})],
+        codex_steps=[
+            CodexStep({"app/task-1.txt": "one\n"}),
+            CodexStep({"app/task-2.txt": "two\n"}),
+        ],
         github_responses={"list_pull_requests": [[existing], [existing]]},
     )
     result = phase6_driver.run_phase6_flow(
@@ -175,14 +192,19 @@ def test_production_unsafe_reconciliation_flow_escalates_comments_labels_and_sum
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
             notification_mention="@configured-reviewer",
         ),
         services,
     )
     assert result.status.upper() == "ESCALATED"
     assert services.github.calls("add_pr_comment")
-    assert any("agent:escalated" in json.dumps(call) for call in services.github.calls("set_labels"))
+    assert any(
+        "agent:escalated" in json.dumps(call) for call in services.github.calls("set_labels")
+    )
     payload = json.dumps(services.github.calls("add_pr_comment")[0]).lower()
     for field in [
         "task id",

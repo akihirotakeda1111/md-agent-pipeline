@@ -25,7 +25,9 @@ class ScriptedCodex:
         self.observations = observations
         self.invocations: list[dict[str, object]] = []
 
-    def invoke(self, *, workspace: Path, env: dict[str, str], argv: list[str] | None = None) -> dict[str, object]:
+    def invoke(
+        self, *, workspace: Path, env: dict[str, str], argv: list[str] | None = None
+    ) -> dict[str, object]:
         if not self._steps:
             raise AssertionError("Fake Codex invoked more times than scripted")
         step = self._steps.pop(0)

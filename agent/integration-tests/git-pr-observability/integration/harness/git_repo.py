@@ -15,12 +15,16 @@ class GitRepo:
     observations: ObservationLog
 
     @classmethod
-    def create(cls, root: Path, observations: ObservationLog) -> "GitRepo":
+    def create(cls, root: Path, observations: ObservationLog) -> GitRepo:
         repo = root / "repo"
         remote = root / "remote.git"
         repo.mkdir(parents=True)
-        subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ["git", "init", "-b", "main", str(repo)], check=True, capture_output=True, text=True
+        )
         result = cls(repo, remote, observations)
         result.git("config", "user.name", "Phase 6 Test")
         result.git("config", "user.email", "phase6@example.invalid")
@@ -40,13 +44,20 @@ class GitRepo:
         observations.timeline.clear()
         return result
 
-    def git(self, *args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def git(
+        self, *args: str, env: dict[str, str] | None = None, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         effective = dict(os.environ)
         if env:
             effective.update(env)
         self.observations.process("git", ["git", *args], effective)
         return subprocess.run(
-            ["git", *args], cwd=self.root, env=effective, check=check, capture_output=True, text=True
+            ["git", *args],
+            cwd=self.root,
+            env=effective,
+            check=check,
+            capture_output=True,
+            text=True,
         )
 
     def write(self, relative: str, content: str) -> None:
@@ -91,6 +102,8 @@ class RecordingProcessRunner:
     def __init__(self, observations: ObservationLog) -> None:
         self.observations = observations
 
-    def run(self, *, role: str, argv: list[str], cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, *, role: str, argv: list[str], cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         self.observations.process(role, argv, env)
         return subprocess.run(argv, cwd=cwd, env=env, check=False, capture_output=True, text=True)

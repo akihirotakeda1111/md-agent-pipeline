@@ -106,16 +106,22 @@ class ServiceBundle:
 class Phase6Driver(Protocol):
     """Stable test DTO boundary; production signatures are translated in one binding module."""
 
-    def run_work_unit(self, request: WorkUnitRequest, services: ServiceBundle) -> WorkUnitResult: ...
+    def run_work_unit(
+        self, request: WorkUnitRequest, services: ServiceBundle
+    ) -> WorkUnitResult: ...
 
     def deliver(self, request: DeliveryRequest, services: ServiceBundle) -> DeliveryResult: ...
 
     def publish_outcome(self, request: NotificationRequest, services: ServiceBundle) -> None: ...
 
-    def run_phase6_flow(self, request: Phase6FlowRequest, services: ServiceBundle) -> Phase6FlowResult:
+    def run_phase6_flow(
+        self, request: Phase6FlowRequest, services: ServiceBundle
+    ) -> Phase6FlowResult:
         """Run Production orchestration, including terminal notification/summary handling."""
         ...
 
 
 def require_status(result: WorkUnitResult | DeliveryResult, expected: str) -> None:
-    assert result.status.upper() == expected, f"expected {expected}, got {result.status}: {result.reason}"
+    assert result.status.upper() == expected, (
+        f"expected {expected}, got {result.status}: {result.reason}"
+    )

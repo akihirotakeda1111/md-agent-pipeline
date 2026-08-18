@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -99,6 +99,7 @@ def artifact_factory(tmp_path: Path, git_repo: GitRepo):
         from agent.spec import parse_spec
         from agent.state import ExecutionState, ExecutionStatus
         from agent.workunit import WorkUnitReport
+
         from .common import HAPPY_PATH_CHANGES
         from .harness.adapters import ArtifactBundle
 

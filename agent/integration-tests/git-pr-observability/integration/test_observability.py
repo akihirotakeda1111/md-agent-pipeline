@@ -66,7 +66,12 @@ def test_new_delivery_emits_delivery_validation_and_pr_created(
     )
     assert_in_order(
         event_names(result.events or services.observations.events),
-        ["DELIVERY_VALIDATION_STARTED", "DELIVERY_VALIDATION_PASSED", "PR_CREATED", "WORKFLOW_COMPLETED"],
+        [
+            "DELIVERY_VALIDATION_STARTED",
+            "DELIVERY_VALIDATION_PASSED",
+            "PR_CREATED",
+            "WORKFLOW_COMPLETED",
+        ],
     )
 
 
@@ -74,7 +79,10 @@ def test_full_production_flow_uses_contractual_partial_event_order(
     phase6_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        codex_steps=[CodexStep({"app/task-1.txt": "one\n"}), CodexStep({"app/task-2.txt": "two\n"})],
+        codex_steps=[
+            CodexStep({"app/task-1.txt": "one\n"}),
+            CodexStep({"app/task-2.txt": "two\n"}),
+        ],
         github_responses=NEW_PR_GITHUB,
     )
     result = phase6_driver.run_phase6_flow(
@@ -82,7 +90,10 @@ def test_full_production_flow_uses_contractual_partial_event_order(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
         ),
         services,
     )
@@ -117,7 +128,10 @@ def test_full_production_reuse_flow_omits_new_delivery_events(
     phase6_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        codex_steps=[CodexStep({"app/task-1.txt": "one\n"}), CodexStep({"app/task-2.txt": "two\n"})],
+        codex_steps=[
+            CodexStep({"app/task-1.txt": "one\n"}),
+            CodexStep({"app/task-2.txt": "two\n"}),
+        ],
         github_responses={"list_pull_requests": [[github_fixture("existing-same-work-unit.json")]]},
     )
     result = phase6_driver.run_phase6_flow(
@@ -125,7 +139,10 @@ def test_full_production_reuse_flow_omits_new_delivery_events(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
         ),
         services,
     )

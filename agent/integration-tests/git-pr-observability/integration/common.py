@@ -8,7 +8,6 @@ from typing import Any
 from .harness.adapters import DeliveryRequest, DeliveryResult, ServiceBundle
 from .harness.git_repo import GitRepo
 
-
 TARGET_BRANCH = "agent/phase6-integration"
 
 HAPPY_PATH_CHANGES = {
@@ -52,7 +51,9 @@ def assert_linear_feature_commit(before: GitSnapshot, repo: GitRepo) -> None:
     assert repo.remote_ref(TARGET_BRANCH) == repo.head
 
 
-def delivery_request(spec_path: Path, repo: GitRepo, artifacts, *, mention: str | None = None) -> DeliveryRequest:
+def delivery_request(
+    spec_path: Path, repo: GitRepo, artifacts, *, mention: str | None = None
+) -> DeliveryRequest:
     return DeliveryRequest(
         spec_path=spec_path,
         repo_root=repo.root,

@@ -42,7 +42,10 @@ class ObservationLog:
         self.timeline.append(f"event:{event.get('event', event.get('type', 'UNKNOWN'))}")
 
     def write_jsonl(self, path: Path) -> None:
-        path.write_text("".join(json.dumps(item, sort_keys=True) + "\n" for item in self.events), encoding="utf-8")
+        path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in self.events),
+            encoding="utf-8",
+        )
 
 
 def event_names(events: list[dict[str, Any]]) -> list[str]:

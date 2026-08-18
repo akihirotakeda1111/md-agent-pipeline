@@ -6,7 +6,6 @@ from .common import NEW_PR_GITHUB, delivery_request
 from .harness.adapters import Phase6FlowRequest
 from .harness.fake_codex import CodexStep
 
-
 REQUIRED_FIELDS = [
     "Task Spec",
     "Task ID",
@@ -65,12 +64,17 @@ def test_repair_attempts_are_preserved_in_report_pr_and_summary(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
         ),
         services,
     )
     assert result.status.upper() == "READY"
-    report = json.loads((git_repo.root.parent / "agent-report" / "report.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (git_repo.root.parent / "agent-report" / "report.json").read_text(encoding="utf-8")
+    )
     assert report["repair_attempts"] == 1
     assert report["state"]["repairAttempts"] == 1
     body = services.github.calls("create_pull_request")[0]["body"]
@@ -96,13 +100,18 @@ def test_repair_attempts_accumulate_across_tasks_in_report_pr_and_summary(
             spec_path=spec_path,
             repo_root=git_repo.root,
             execute_environment={"CODEX_API_KEY": "codex-test"},
-            deliver_environment={"GITHUB_TOKEN": "github-test", "GITHUB_REPOSITORY": "example/phase6"},
+            deliver_environment={
+                "GITHUB_TOKEN": "github-test",
+                "GITHUB_REPOSITORY": "example/phase6",
+            },
         ),
         services,
     )
     assert result.status.upper() == "READY"
     assert len(services.codex.invocations) == 4
-    report = json.loads((git_repo.root.parent / "agent-report" / "report.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (git_repo.root.parent / "agent-report" / "report.json").read_text(encoding="utf-8")
+    )
     assert report["repair_attempts"] == 2
     assert report["state"]["repairAttempts"] == 2
     body = services.github.calls("create_pull_request")[0]["body"]

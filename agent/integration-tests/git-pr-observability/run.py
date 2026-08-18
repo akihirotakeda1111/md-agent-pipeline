@@ -9,10 +9,9 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_BINDING = "integration.invoke_phase6"
@@ -24,15 +23,21 @@ def load_cases() -> list[dict[str, str]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Phase 6 Production integration suite")
-    parser.add_argument("--production-root", type=Path, default=Path.cwd(), help="Production repository root")
+    parser.add_argument(
+        "--production-root", type=Path, default=Path.cwd(), help="Production repository root"
+    )
     parser.add_argument(
         "--binding",
         default=os.environ.get("PHASE6_BINDING", DEFAULT_BINDING),
         help="Import path exposing create_driver()",
     )
-    parser.add_argument("--case", action="append", dest="case_ids", help="Run one case ID; repeatable")
+    parser.add_argument(
+        "--case", action="append", dest="case_ids", help="Run one case ID; repeatable"
+    )
     parser.add_argument("--list", action="store_true", help="List case IDs without running")
-    parser.add_argument("--report-dir", type=Path, default=ROOT / "reports", help="Evidence output directory")
+    parser.add_argument(
+        "--report-dir", type=Path, default=ROOT / "reports", help="Evidence output directory"
+    )
     parser.add_argument(
         "--pytest-arg",
         action="append",
@@ -58,7 +63,7 @@ def preflight(production_root: Path, binding: str) -> list[str]:
             sys.path.insert(0, path)
     try:
         module = importlib.import_module(binding)
-        getattr(module, "create_driver")()
+        module.create_driver()
     except Exception as exc:
         errors.append(f"Production binding unavailable ({binding}): {exc}")
     return errors
@@ -104,7 +109,7 @@ def main() -> int:
 
     production_root = args.production_root.resolve()
     report_dir = args.report_dir.resolve()
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
     try:
         nodes = selected_nodes(args.case_ids, cases)
     except ValueError as exc:
@@ -156,7 +161,11 @@ def main() -> int:
     print(f"[Phase 6] Binding: {args.binding}")
     print(f"[Phase 6] Cases: {', '.join(args.case_ids) if args.case_ids else 'ALL'}")
     completed = subprocess.run(command, cwd=production_root, env=env, check=False)
-    counts = junit_counts(junit) if junit.is_file() else {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    counts = (
+        junit_counts(junit)
+        if junit.is_file()
+        else {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    )
     passed = completed.returncode == 0 and counts["skipped"] == 0 and counts["tests"] > 0
     status = "PASS" if passed else "FAIL"
     write_report(
@@ -164,7 +173,7 @@ def main() -> int:
         {
             "status": status,
             "started_at": started,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
             "production_root": str(production_root),
             "binding": args.binding,
             "case_ids": args.case_ids or "ALL",
@@ -174,7 +183,9 @@ def main() -> int:
         },
     )
     if counts["skipped"]:
-        print(f"[Phase 6] FAIL: {counts['skipped']} skipped test(s) are not accepted", file=sys.stderr)
+        print(
+            f"[Phase 6] FAIL: {counts['skipped']} skipped test(s) are not accepted", file=sys.stderr
+        )
     print(
         f"[Phase 6] {status}: tests={counts['tests']} failures={counts['failures']} "
         f"errors={counts['errors']} skipped={counts['skipped']}"

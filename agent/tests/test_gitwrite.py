@@ -121,9 +121,7 @@ def test_push_injects_https_auth_without_github_token_in_git_env(
     assert argv[:2] == ["git", "push"]
 
 
-def test_commit_does_not_receive_push_auth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_commit_does_not_receive_push_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     (repo / "src").mkdir()
     (repo / "src" / "app.py").write_text("ok\n", encoding="utf-8")

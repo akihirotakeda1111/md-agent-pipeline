@@ -11,10 +11,11 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from agent.codex_runner import ProcessResult
 from agent.config import load_config
@@ -307,7 +308,9 @@ class ProductionPhase6Driver:
             labels=[label],
         )
 
-    def run_phase6_flow(self, request: Phase6FlowRequest, services: ServiceBundle) -> Phase6FlowResult:
+    def run_phase6_flow(
+        self, request: Phase6FlowRequest, services: ServiceBundle
+    ) -> Phase6FlowResult:
         work = self.run_work_unit(
             WorkUnitRequest(
                 spec_path=request.spec_path,

@@ -34,6 +34,6 @@ def test_observations_are_valid_json_lines(tmp_path):
     observations = ObservationLog(events=[{"event": "SPEC_DISCOVERED", "task_id": "x"}])
     target = tmp_path / "events.jsonl"
     observations.write_jsonl(target)
-    assert [json.loads(line)["event"] for line in target.read_text(encoding="utf-8").splitlines()] == [
-        "SPEC_DISCOVERED"
-    ]
+    assert [
+        json.loads(line)["event"] for line in target.read_text(encoding="utf-8").splitlines()
+    ] == ["SPEC_DISCOVERED"]

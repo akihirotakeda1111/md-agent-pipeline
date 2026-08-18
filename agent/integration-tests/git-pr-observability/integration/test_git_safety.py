@@ -29,7 +29,9 @@ def test_20_23_no_force_amend_rebase_merge_or_history_rewrite_on_success(
 ):
     services = service_factory(github_responses=NEW_PR_GITHUB)
     before = snapshot(git_repo)
-    phase6_driver.deliver(delivery_request(spec_path, git_repo, artifact_factory(spec_path)), services)
+    phase6_driver.deliver(
+        delivery_request(spec_path, git_repo, artifact_factory(spec_path)), services
+    )
     assert_linear_feature_commit(before, git_repo)
 
 

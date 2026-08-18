@@ -119,7 +119,9 @@ def test_17_patch_manifest_mismatch_does_not_commit(
     phase6_driver, spec_path, git_repo, service_factory, artifact_factory
 ):
     services = service_factory(github_responses={"list_pull_requests": [[]]})
-    artifacts = artifact_factory(spec_path, report_overrides={"changed_files": ["app/declared-only.txt"]})
+    artifacts = artifact_factory(
+        spec_path, report_overrides={"changed_files": ["app/declared-only.txt"]}
+    )
     before = snapshot(git_repo)
     result = phase6_driver.deliver(delivery_request(spec_path, git_repo, artifacts), services)
     assert result.reason and "PATCH_MANIFEST_MISMATCH" in result.reason.upper()
