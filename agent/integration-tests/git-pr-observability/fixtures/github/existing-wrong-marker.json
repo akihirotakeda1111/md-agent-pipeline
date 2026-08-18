@@ -1,0 +1,8 @@
+{
+  "number": 43,
+  "state": "open",
+  "html_url": "https://example.invalid/pull/43",
+  "head": { "ref": "agent/phase6-integration" },
+  "base": { "ref": "main" },
+  "body": "<!-- md-agent-work-unit\nspec_id: another-spec\nbase_branch: main\ntarget_branch: agent/phase6-integration\n-->"
+}
