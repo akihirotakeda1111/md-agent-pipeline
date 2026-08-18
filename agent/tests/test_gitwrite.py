@@ -86,3 +86,60 @@ def test_push_branch_to_local_origin(tmp_path: Path) -> None:
     push_branch(repo, "feature/demo")
     listed = require_git_ok(run_git(origin, "branch"), "branch")
     assert "feature/demo" in listed
+
+
+def test_push_injects_https_auth_without_github_token_in_git_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import base64
+
+    repo = _repo(tmp_path)
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "--bare")
+    _git(repo, "remote", "add", "origin", str(origin))
+    create_branch_from_sha(repo, "feature/demo", head_sha(repo))
+    captured: dict[str, object] = {}
+    real = subprocess.run
+
+    def fake_run(*args: object, **kwargs: object):
+        captured["argv"] = args[0] if args else kwargs.get("args")
+        captured["env"] = kwargs.get("env")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("agent.gitwrite.subprocess.run", fake_run)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_push_token")
+    push_branch(repo, "feature/demo")
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert "GITHUB_TOKEN" not in env
+    assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    encoded = base64.b64encode(b"x-access-token:ghs_test_push_token").decode("ascii")
+    assert env["GIT_CONFIG_VALUE_0"] == f"AUTHORIZATION: basic {encoded}"
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert argv[:2] == ["git", "push"]
+
+
+def test_commit_does_not_receive_push_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.py").write_text("ok\n", encoding="utf-8")
+    captured: list[dict[str, str]] = []
+    real = subprocess.run
+
+    def fake_run(*args: object, **kwargs: object):
+        env = kwargs.get("env") or {}
+        if isinstance(env, dict):
+            captured.append(env)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("agent.gitwrite.subprocess.run", fake_run)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_push_token")
+    commit_paths(repo, ["src/app.py"], "feat(demo): complete task-1")
+    assert captured
+    for env in captured:
+        assert "GITHUB_TOKEN" not in env
+        assert "GIT_CONFIG_KEY_0" not in env

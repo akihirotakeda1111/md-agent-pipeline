@@ -191,8 +191,8 @@ def collect_failures(text: str | None = None) -> list[str]:
         _require(isinstance(checkout, dict), "deliver must checkout", failures)
         if isinstance(checkout, dict):
             _require(
-                checkout.get("with", {}).get("persist-credentials") is True,
-                "deliver checkout must persist credentials for git push",
+                checkout.get("with", {}).get("persist-credentials") is False,
+                "deliver checkout must not persist credentials; push injects auth in-process",
                 failures,
             )
 

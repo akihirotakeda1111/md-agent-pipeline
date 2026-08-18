@@ -12,6 +12,9 @@
 # Write authority isolation:
 # - execute has contents: read and the Codex API secret. persist-credentials: false.
 # - deliver has contents/pull-requests/issues write and GITHUB_TOKEN. No CODEX_API_KEY.
+# - Both jobs use persist-credentials: false so Final Verification and other
+#   repository-controlled processes cannot reach stored git write credentials.
+# - git push injects HTTPS auth into the Orchestrator git subprocess only.
 # - Codex subprocess never receives GitHub write credentials.
 #
 # Concurrency contract:
@@ -180,7 +183,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5

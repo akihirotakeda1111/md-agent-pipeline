@@ -2,11 +2,14 @@
 
 Forbidden: force push, history rewrite, commit --amend, rebase.
 Git subprocess env is sanitized and never receives CODEX_API_KEY or GITHUB_TOKEN.
-Push uses credentials persisted by actions/checkout in .git/config, not env tokens.
+Checkout uses persist-credentials: false. Push injects HTTPS auth via a
+process-local GIT_CONFIG extraHeader so Final Verification cannot reuse it.
 """
 
 from __future__ import annotations
 
+import base64
+import os
 import subprocess
 from pathlib import Path
 
@@ -274,8 +277,28 @@ def commit_paths(
     return require_git_ok(run_git(repo_root, "rev-parse", "HEAD"), "rev-parse", "HEAD").strip()
 
 
+def _push_auth_env() -> dict[str, str]:
+    """HTTPS auth for the git push subprocess only. Not written to .git/config."""
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if not token:
+        return {}
+    server = (os.environ.get("GITHUB_SERVER_URL") or "https://github.com").rstrip("/")
+    basic = base64.b64encode(f"x-access-token:{token}".encode("ascii")).decode("ascii")
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"http.{server}/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+    }
+
+
 def push_branch(repo_root: Path | str, branch: str) -> None:
-    completed = run_git_write(repo_root, "push", "origin", f"HEAD:refs/heads/{branch}")
+    completed = run_git_write(
+        repo_root,
+        "push",
+        "origin",
+        f"HEAD:refs/heads/{branch}",
+        extra_env=_push_auth_env(),
+    )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         lowered = detail.lower()
