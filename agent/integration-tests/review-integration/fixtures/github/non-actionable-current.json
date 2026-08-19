@@ -1,0 +1,13 @@
+{
+  "id": "comment-200",
+  "kind": "review",
+  "actor": "coderabbitai[bot]",
+  "body": "Summary only; no change requested.",
+  "created_at": "2026-08-19T00:01:00Z",
+  "updated_at": "2026-08-19T00:01:00Z",
+  "path": null,
+  "line": null,
+  "pr_number": 42,
+  "head_sha": "__CURRENT_HEAD__"
+}
+

@@ -135,6 +135,7 @@ CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workf
 
 ```bash
 python -m pytest agent/tests/test_phase7.py agent/tests/test_review_workflow.py
+python agent/integration-tests/review-integration/run.py --production-root .
 ```
 
 ## Spec / state CLIs
