@@ -138,6 +138,27 @@ python -m pytest agent/tests/test_phase7.py agent/tests/test_review_workflow.py
 python agent/integration-tests/review-integration/run.py --production-root .
 ```
 
+### Phase 7 — Real GitHub E2E
+
+本番 `agent-execute.yml` と `agent-review.yml` をそのまま使い、Real CodeRabbit、Real classifier、Real Codex review repair、Real GitHub 上の READY 収束を確認します。E2E専用workflowや Fake service は使いません。Task Spec の `base_branch` は temporary branch（`e2e/phase7-*`）自身です。repository default へは commit しません。
+
+`gh` には対象repositoryについて次が必要です。
+
+- **Contents: write** — temporary base / feature branch の push と delete
+- **Pull requests: write** — PR の read / close と Scenario B の comment
+- **Actions: write** — run の read / dispatch
+
+Production 側は既存 Phase 7 Manual Setup（Secret `CODEX_API_KEY` / `REVIEW_CLASSIFIER_API_KEY`、CodeRabbit App、`.coderabbit.yaml` の `e2e/phase7-.*`、Actions の PR 作成許可、workflow active）が必要です。Harness は Secret 値を読みません。
+
+```bash
+python -m pip install -r agent/integration-tests/github-review-e2e/requirements.txt
+python agent/integration-tests/github-review-e2e/self_test.py
+python agent/integration-tests/github-review-e2e/run.py --repo OWNER/REPO --preflight-only
+python agent/integration-tests/github-review-e2e/run.py --repo OWNER/REPO
+```
+
+調査のため PR / branch を残す場合は `--keep-resources` を付けます。省略時は assertion 後に E2E PR を close し、target branch と source branch を delete します。詳細は `agent/integration-tests/github-review-e2e/README.md` です。
+
 ## Spec / state CLIs
 
 ```text

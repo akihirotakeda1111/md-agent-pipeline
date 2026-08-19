@@ -47,6 +47,8 @@ Pull Request の merge は自動化しません。Human responsibility です。
 | `prompts/implementation.md` / `prompts/repair.md` / `prompts/review-repair.md` / `prompts/review-classify.md` | Codex および classifier 向け contract |
 | `tests/` | unit tests |
 
+Real GitHub Phase 7 E2E は `agent/integration-tests/github-review-e2e/`。Fake 結合は `agent/integration-tests/review-integration/`。
+
 ## Task Spec headings
 
 Markdown 本文は次の H1 を必須とします。
