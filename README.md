@@ -182,7 +182,7 @@ Phase 7 の実 GitHub 実行には追加の人間側設定が必要です。
 - **CodeRabbit auto review**: `.coderabbit.yaml` の `reviews.auto_review.enabled: true`。Orchestrator は ready PR を作るので `drafts: false`。Draft 運用に変えるときは `drafts: true` も必要
 - **CodeRabbit incremental review**: `auto_incremental_review: true`。repair push の再レビューが止まると Phase 7 ループは収束しない。Organization / UI 側で上書きしないこと
 - **CodeRabbit auto-pause**: `auto_pause_after_reviewed_commits` は 0（無制限）にしない。`1 + review_attempt_limit` 以上を維持する（現行は 5、limit は 3）
-- **CodeRabbit base branches**: 空配列は repository default（通常 `main`）だけ。TODO 比較などで別 base を使う spec があるときだけその branch を追加する
+- **CodeRabbit base branches**: `.coderabbit.yaml` は repository default（`^main$`）と Phase 7 E2E isolated base（`e2e/phase7-.*`）を明示する。空配列は default のみになり、`github-review-e2e` は `ENVIRONMENT_BLOCKER` で止まる。非空 list は CodeRabbit の implicit default を置き換えるので `main` を残す
 - **CodeRabbit actor**: テスト PR の GitHub event で実際の `sender.login` / `actor.login` を確認し、その値だけを `agent/config.json` の `coderabbit.actor` に入れる。bot 名を推測で確定しない。識別ロジックへ bot 名を hard-code しない
 - **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。修正は Classifier → Policy → Codex だけ
 - **CodeRabbit PR summary**: PR 本文（work-unit marker）を書き換えない。`high_level_summary: false` と `high_level_summary_in_walkthrough: true`

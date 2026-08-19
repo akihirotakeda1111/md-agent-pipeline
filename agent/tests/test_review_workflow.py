@@ -96,7 +96,10 @@ def test_coderabbit_yaml_keeps_incremental_review() -> None:
     assert pause != 0
     assert pause >= 1 + load_config().retry.review_attempt_limit
     assert auto["drafts"] is False
-    assert auto["base_branches"] == []
+    branches = auto["base_branches"]
+    assert isinstance(branches, list)
+    assert "^main$" in branches
+    assert "e2e/phase7-.*" in branches
     touches = reviews["finishing_touches"]
     assert touches["autofix"]["enabled"] is False
     assert touches["docstrings"]["enabled"] is False

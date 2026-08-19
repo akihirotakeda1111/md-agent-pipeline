@@ -19,9 +19,12 @@ reviews:
     auto_pause_after_reviewed_commits: 5
     # Orchestrator create_pull does not set draft; GitHub default is ready.
     drafts: false
-    # Empty = repository default branch only (normally main). Add a pattern
-    # only when a spec uses another base_branch.
-    base_branches: []
+    # A non-empty list replaces CodeRabbit's implicit default-branch-only
+    # rule, so the repository default must stay explicit. e2e/phase7-.* is
+    # the isolated Phase 7 Real GitHub E2E base (not merged to default).
+    base_branches:
+      - "^main$"
+      - "e2e/phase7-.*"
   finishing_touches:
     autofix:
       enabled: false
