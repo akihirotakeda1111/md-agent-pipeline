@@ -102,7 +102,7 @@ Taskは専用text fileを1つ作成するだけです。Scopeはその1 pathだ�
 7. workflow、execute job、deliver jobのsuccessを確認
 8. target branch、delivery commit、changed fileを実GitHub APIで確認
 9. open PRが正確に1件であることを確認
-10. head/base、work-unit marker、PR sections、`agent:ready`を確認
+10. head/base、work-unit marker、PR sections、`agent:review`を確認
 
 Delivery head commitとPR差分はgenerated fileだけを含む必要があります。Task Specはtemporary base上にあるためPR差分には出ません。
 

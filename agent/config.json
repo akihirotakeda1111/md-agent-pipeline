@@ -24,7 +24,11 @@
     "require_clean_worktree": true
   },
   "review": {
-    "classifier_model": null,
+    "provider": "openai",
+    "classifier_model": "gpt-5.4-nano-2026-03-17",
+    "confidence_threshold": 0.80,
+    "api_key_env": "REVIEW_CLASSIFIER_API_KEY",
+    "track_author": "github-actions[bot]",
     "max_comments_per_run": null
   },
   "notification": {

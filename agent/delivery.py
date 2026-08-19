@@ -203,7 +203,7 @@ def _deliver(
         assert pull is not None
         number = int(pull["number"])
         url = str(pull.get("html_url") or "")
-        apply_status_label(github, number, "agent:ready")
+        apply_status_label(github, number, "agent:review")
         return DeliveryResult(
             outcome="PR_CREATED",
             pr_url=url or None,
@@ -298,7 +298,7 @@ def _deliver(
         created = raced.pull
     number = int(created["number"])
     url = str(created.get("html_url") or "")
-    apply_status_label(github, number, "agent:ready")
+    apply_status_label(github, number, "agent:review")
     emit(PR_CREATED, url or f"pull request #{number}", task_id=spec.id, state="PR_CREATED")
     return DeliveryResult(
         outcome="PR_CREATED",

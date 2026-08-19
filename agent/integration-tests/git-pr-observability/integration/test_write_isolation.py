@@ -62,7 +62,7 @@ def test_adapter_restores_process_env_between_execute_and_deliver(
     assert os.environ.get("GITHUB_TOKEN") == before.get("GITHUB_TOKEN")
 
 
-def test_phase6_labels_exclude_review_and_running(
+def test_phase6_deliver_applies_review_waiting_label(
     phase6_driver, spec_path, git_repo, service_factory, artifact_factory
 ):
     services = service_factory(github_responses=NEW_PR_GITHUB)
@@ -70,6 +70,6 @@ def test_phase6_labels_exclude_review_and_running(
         delivery_request(spec_path, git_repo, artifact_factory(spec_path)), services
     )
     payload = json.dumps([item.payload for item in services.observations.github])
-    assert "agent:ready" in payload
-    assert "agent:review" not in payload
+    assert "agent:review" in payload
+    assert "agent:ready" not in payload
     assert "agent:running" not in payload

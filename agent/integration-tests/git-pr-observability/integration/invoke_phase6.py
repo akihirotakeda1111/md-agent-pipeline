@@ -85,6 +85,9 @@ class _FakeGitHubClient:
     def add_issue_labels(self, issue_number: int, labels: list[str]) -> None:
         self._fake.set_labels(issue_number=issue_number, labels=labels)
 
+    def remove_issue_label(self, issue_number: int, name: str) -> None:
+        self._fake.request("remove_label", issue_number=issue_number, name=name)
+
     def create_issue(
         self, *, title: str, body: str, labels: list[str] | None = None
     ) -> dict[str, Any]:

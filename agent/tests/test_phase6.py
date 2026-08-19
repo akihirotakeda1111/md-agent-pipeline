@@ -349,6 +349,12 @@ class _FakeGitHub:
     def add_issue_labels(self, issue_number: int, labels: list[str]) -> None:
         self.labels[f"issue:{issue_number}"] = {"labels": ",".join(labels)}
 
+    def remove_issue_label(self, issue_number: int, name: str) -> None:
+        key = f"issue:{issue_number}"
+        current = self.labels.get(key, {}).get("labels", "")
+        kept = [item for item in current.split(",") if item and item != name]
+        self.labels[key] = {"labels": ",".join(kept)}
+
     def create_pull(self, *, title: str, head: str, base: str, body: str) -> dict[str, object]:
         self.created_pulls += 1
         pull = {
@@ -788,7 +794,7 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
     from agent.delivery import run_delivery
     from agent.github_api import GitHubClient
     from agent.gitwrite import export_patch, head_sha
-    from agent.labels import PHASE6_APPLIED_LABELS
+    from agent.labels import PHASE7_APPLIED_LABELS
     from agent.spec import parse_spec as parse
     from agent.workunit import file_sha256, write_work_unit_report
 
@@ -853,6 +859,8 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
             }
         if method == "POST" and "/issues/" in url and url.endswith("/labels"):
             return 200, []
+        if method == "DELETE" and "/labels/" in url:
+            return 200, []
         raise AssertionError(f"unexpected GitHub call {method} {url}")
 
     result = run_delivery(
@@ -865,7 +873,7 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
     assert result.outcome == "PR_CREATED"
     assert result.pr_number == 12
     assert result.code != "GITHUB_API_NETWORK"
-    assert created_labels == set(PHASE6_APPLIED_LABELS)
+    assert created_labels == set(PHASE7_APPLIED_LABELS)
     assert any(method == "POST" and url.endswith("/pulls") for method, url in calls)
     assert "feature/deliver" in _git(origin, "branch")
 

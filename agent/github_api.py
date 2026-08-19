@@ -1,7 +1,9 @@
 """GitHub REST client for Orchestrator write operations.
 
-Official references (verified 2026-08-17):
+Official references (verified 2026-08-17 / 2026-08-19):
 - Pulls: https://docs.github.com/en/rest/pulls/pulls
+- Reviews: https://docs.github.com/en/rest/pulls/reviews
+- Review comments: https://docs.github.com/en/rest/pulls/comments
 - Labels: https://docs.github.com/en/rest/issues/labels
 - Issue comments: https://docs.github.com/en/rest/issues/comments
 - Create issue: https://docs.github.com/en/rest/issues/issues
@@ -201,6 +203,75 @@ class GitHubClient:
                 code="GITHUB_API_FAILURE",
             )
         return response.payload
+
+    def get_pull(self, number: int) -> dict[str, Any]:
+        response = self.request("GET", f"/repos/{self.owner}/{self.repo}/pulls/{number}")
+        if not isinstance(response.payload, dict):
+            raise AgentError.environment_failure(
+                "GitHub pull response is not an object",
+                code="GITHUB_API_FAILURE",
+            )
+        return response.payload
+
+    def list_reviews(self, pull_number: int) -> list[dict[str, Any]]:
+        return self._list_paginated(f"/repos/{self.owner}/{self.repo}/pulls/{pull_number}/reviews")
+
+    def list_review_comments(self, pull_number: int) -> list[dict[str, Any]]:
+        return self._list_paginated(f"/repos/{self.owner}/{self.repo}/pulls/{pull_number}/comments")
+
+    def list_issue_comments(self, issue_number: int) -> list[dict[str, Any]]:
+        return self._list_paginated(
+            f"/repos/{self.owner}/{self.repo}/issues/{issue_number}/comments"
+        )
+
+    def update_issue_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        response = self.request(
+            "PATCH",
+            f"/repos/{self.owner}/{self.repo}/issues/comments/{comment_id}",
+            body={"body": body},
+        )
+        if not isinstance(response.payload, dict):
+            raise AgentError.environment_failure(
+                "GitHub comment update response is not an object",
+                code="GITHUB_API_FAILURE",
+            )
+        return response.payload
+
+    def remove_issue_label(self, issue_number: int, name: str) -> None:
+        encoded = quote(name, safe="")
+        try:
+            self.request(
+                "DELETE",
+                f"/repos/{self.owner}/{self.repo}/issues/{issue_number}/labels/{encoded}",
+            )
+        except AgentError as exc:
+            if exc.code == "GITHUB_NOT_FOUND":
+                return
+            raise
+
+    def _list_paginated(self, path: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        page = 1
+        while page <= 50:
+            response = self.request(
+                "GET",
+                path,
+                query={"per_page": "100", "page": str(page)},
+            )
+            if not isinstance(response.payload, list):
+                raise AgentError.environment_failure(
+                    "GitHub list response is not an array",
+                    code="GITHUB_API_FAILURE",
+                )
+            batch = [item for item in response.payload if isinstance(item, dict)]
+            items.extend(batch)
+            if len(response.payload) < 100:
+                return items
+            page += 1
+        raise AgentError.environment_failure(
+            "GitHub list pagination exceeded the fail-closed page limit",
+            code="GITHUB_API_FAILURE",
+        )
 
 
 def github_client_from_env(

@@ -80,7 +80,7 @@ def assert_pr(pr: PullRequestEvidence, scenario: Scenario) -> None:
         "PR body missing work-unit marker"
     )
     assert scenario.task_id in pr.body, "PR body marker is not bound to Task ID"
-    assert "agent:ready" in pr.labels
+    assert "agent:review" in pr.labels
 
 
 def assert_commit_files(files: list[str], scenario: Scenario) -> None:

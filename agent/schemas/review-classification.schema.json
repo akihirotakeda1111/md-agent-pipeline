@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-classification.schema.json",
+  "title": "ReviewClassification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["classification", "confidence", "reason", "referencedPaths"],
+  "properties": {
+    "classification": {
+      "type": "string",
+      "enum": [
+        "ACTIONABLE",
+        "NON_ACTIONABLE",
+        "OUT_OF_SCOPE",
+        "CONFLICTS_WITH_SPEC",
+        "UNCERTAIN"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "referencedPaths": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 Markdown Task Spec を決定論的 Orchestrator が解釈し、OpenAI Codex CLI へ実装を委譲するための基盤です。
 
-現在は Phase 6（Git, PR, Restart / GitHub Reconciliation & Observability）までです。CodeRabbit レビューループは未実装です。
+現在は Phase 7（CodeRabbit Asynchronous Review Loop）までです。Pull Request の merge は自動化しません。
 
 ## Language
 
@@ -29,7 +29,7 @@ agent/                 Orchestrator code
   gitutil.py / scope.py / validation.py / classify.py / cycle.py
   gitwrite.py / github_api.py / reconcile.py / delivery.py
   tests/
-.github/workflows/     Task Spec intake, execute, commit/PR deliver
+.github/workflows/     Task Spec intake, execute, commit/PR deliver, async CodeRabbit review
 .agent/state/          Orchestrator-owned ephemeral runtime metadata
 specs/tasks/           Human-owned Task Specs
 ```
@@ -129,6 +129,14 @@ python agent/integration-tests/github-pr-e2e/run.py --repo OWNER/REPO
 
 調査のため PR / branch を残す場合は `--keep-resources` を付けます。省略時は assertion 後に E2E PR を close し、target branch と source branch を delete します。詳細は `agent/integration-tests/github-pr-e2e/README.md` です。
 
+### Phase 7 — CodeRabbit Review
+
+CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workflow `.github/workflows/agent-review.yml` が `pull_request_review` / `pull_request_review_comment` / `issue_comment` を受け、GitHub API から現状を再取得します。LLM API は unit test で mock します。
+
+```bash
+python -m pytest agent/tests/test_phase7.py agent/tests/test_review_workflow.py
+```
+
 ## Spec / state CLIs
 
 ```text
@@ -145,9 +153,11 @@ python agent/scripts/run-work-unit.py --spec specs/tasks/example-task.md --repor
 python agent/scripts/deliver.py --spec specs/tasks/example-task.md --report-dir /tmp/agent-report
 python agent/scripts/prepare-intake.py --event-name workflow_dispatch --ref-name main --sha HEAD --spec-path specs/tasks/example-task.md
 python agent/scripts/prepare-execute.py --spec specs/tasks/example-task.md
+python agent/scripts/prepare-review.py --event-path /tmp/event.json --repository OWNER/REPO
+python agent/scripts/run-review.py --pull-number 1 --head-sha HEAD --spec specs/tasks/example-task.md
 ```
 
-GitHub Actions は `.github/workflows/agent-execute.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。
+GitHub Actions は `.github/workflows/agent-execute.yml` と `.github/workflows/agent-review.yml` です。`specs/tasks/**/*.md` の push、または `workflow_dispatch` の `spec_path` 入力で起動します。Invalid Spec は workflow を FAIL します。feature branch（spec の `base_branch` 以外）への push は SUCCESS し execute を skip します。同一 `task_id` は execute 完了まで再 push しない運用です。
 
 execute job（`contents: read`）は checkout → Python / Node → 依存 install → `openai/codex-action` による sandbox bootstrap → `run-work-unit.py` の順です。Action は prompt なしで GitHub-hosted runner 上の `workspace-write` sandbox を通す準備だけをし、Orchestrator の代替にはしません。リポジトリ Secret `CODEX_API_KEY` は execute job の Orchestrator step にだけ渡し、Action と deliver job には渡しません。
 
@@ -161,8 +171,25 @@ Phase 6 の実 GitHub 実行には人間側の設定が必要です。
 - **Actions permissions**: workflow は default `contents: read`。deliver job だけ `contents: write` / `pull-requests: write` / `issues: write`
 - **Allow GitHub Actions to create and approve pull requests**: repository Settings → Actions → General → Workflow permissions で有効化しないと `GITHUB_TOKEN` は PR を作れません
 - **branch protection**: base branch の protection は維持してよい。feature branch への Orchestrator push を妨げないこと。force push は使わない
-- labels: `agent:ready` / `agent:escalated` / `agent:failed` は未作成なら Deliver が API で作成する（`issues: write`）。`agent:running` は execute に write を足さないため適用しない。`agent:review` は Phase 7
+- labels: `agent:review` / `agent:ready` / `agent:escalated` / `agent:failed` は exclusive。Deliver は PR 作成時に `agent:review` を付ける。review が current HEAD で収束したときだけ `agent:ready`。`agent:running` は execute に write を足さないため適用しない
 - **Codex authentication**: `CODEX_API_KEY` のみ。deliver / Git / Validation へは渡さない
 - **optional notification target**: `agent/config.json` の `notification.mention`。未設定時にユーザー名を生成しない
+
+Phase 7 の実 GitHub 実行には追加の人間側設定が必要です。
+
+- **CodeRabbit GitHub App**: 対象 repository に CodeRabbit をインストールし、PR へ review comment を投稿できる状態にする
+- **CodeRabbit auto review**: `.coderabbit.yaml` の `reviews.auto_review.enabled: true`。Orchestrator は ready PR を作るので `drafts: false`。Draft 運用に変えるときは `drafts: true` も必要
+- **CodeRabbit incremental review**: `auto_incremental_review: true`。repair push の再レビューが止まると Phase 7 ループは収束しない。Organization / UI 側で上書きしないこと
+- **CodeRabbit auto-pause**: `auto_pause_after_reviewed_commits` は 0（無制限）にしない。`1 + review_attempt_limit` 以上を維持する（現行は 5、limit は 3）
+- **CodeRabbit base branches**: 空配列は repository default（通常 `main`）だけ。TODO 比較などで別 base を使う spec があるときだけその branch を追加する
+- **CodeRabbit actor**: テスト PR の GitHub event で実際の `sender.login` / `actor.login` を確認し、その値だけを `agent/config.json` の `coderabbit.actor` に入れる。bot 名を推測で確定しない。識別ロジックへ bot 名を hard-code しない
+- **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。修正は Classifier → Policy → Codex だけ
+- **CodeRabbit PR summary**: PR 本文（work-unit marker）を書き換えない。`high_level_summary: false` と `high_level_summary_in_walkthrough: true`
+- **GitHub Secrets**: Repository Secret `REVIEW_CLASSIFIER_API_KEY`（`agent-review.yml` の review orchestrator step のみ）。CodeRabbit 用ではなく Semantic Review Classifier 用。`CODEX_API_KEY` と共有しない。prepare job と execute/deliver には渡さない
+- **Actions permissions**: `agent-review.yml` は default `contents: read`。prepare は `pull-requests: read`。review job だけ `contents: write` / `pull-requests: write` / `issues: write`。`pull_request_target` は使わない
+- **Allow GitHub Actions to write to feature branches**: review repair の commit/push が branch protection で拒否されないこと。force push / amend / rebase は使わない
+- labels: Deliver は PR 作成時に `agent:review` を適用する。current HEAD の未処理 review が空になったときだけ `agent:ready`。限界・衝突・uncertain は `agent:escalated`、再試行可能な障害は `agent:failed`。exclusive status を重ねない
+- **Merge**: 自動 merge しない。Human が PR を merge する
+- **Classifier model**: `agent/config.json` の `review.classifier_model` は OpenAI Structured Outputs の snapshot `gpt-5.4-nano-2026-03-17` を pin する。架空の model 名は使わない
 
 Codex CLI は公式 `@openai/codex@0.147.0` を pin します。本番の API 認証は Orchestrator が `CODEX_API_KEY` を Codex subprocess にだけ渡す経路です。Action の placeholder `openai-api-key` は sandbox bootstrap 用で、この認証経路ではありません。MVP ではモデルも `agent/config.json` の `codex.model`で Repository 側に明示固定し、ローカルと CI で同じ値を使います。`~/.codex` などのユーザー設定や CLI 暗黙デフォルトには依存しません。
