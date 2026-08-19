@@ -60,10 +60,13 @@ _KIND_MAP = {
 class _FakeGitHubClient:
     """Maps Production GitHubClient methods onto the recording FakeGitHub."""
 
-    def __init__(self, fake: FakeGitHub, *, repository: str, track_author: str) -> None:
+    def __init__(
+        self, fake: FakeGitHub, *, repository: str, track_author: str, repo_root: Path
+    ) -> None:
         self._fake = fake
         self._repository = repository
         self._track_author = track_author
+        self._repo_root = Path(repo_root)
         self._feedback_cache: list[dict[str, Any]] | None = None
 
     def _feedback(self) -> list[dict[str, Any]]:
@@ -76,6 +79,30 @@ class _FakeGitHubClient:
         payload = self._fake.get_pull_request(number=number)
         raw = payload if isinstance(payload, dict) else {}
         return _production_pull(raw, repository=self._repository, requested_number=number)
+
+    def get_content(self, path: str, *, ref: str) -> str:
+        self._fake.request("get_content", path=path, ref=ref)
+        return _contained_path(self._repo_root, path).read_text(encoding="utf-8")
+
+    def list_contents(self, path: str, *, ref: str) -> list[dict[str, Any]]:
+        self._fake.request("list_contents", path=path, ref=ref)
+        directory = _contained_path(self._repo_root, path)
+        if not directory.is_dir():
+            raise AgentError.environment_failure(
+                f"GitHub content is not a directory: {path}",
+                code="GITHUB_NOT_FOUND",
+            )
+        entries: list[dict[str, Any]] = []
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            relative = child.relative_to(self._repo_root).as_posix()
+            entries.append(
+                {
+                    "type": "dir" if child.is_dir() else "file",
+                    "path": relative,
+                    "name": child.name,
+                }
+            )
+        return entries
 
     def list_reviews(self, pull_number: int) -> list[dict[str, Any]]:
         return [_as_github_review(item) for item in self._feedback() if _kind(item) == KIND_REVIEW]
@@ -159,6 +186,15 @@ class _FakeGitHubClient:
                 "user": {"login": self._track_author},
             }
         return None
+
+
+def _contained_path(root: Path, relative: str) -> Path:
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError as exc:
+        raise AgentError.invalid_input(f"invalid repository content path: {relative!r}") from exc
+    return candidate
 
 
 def _kind(item: dict[str, Any]) -> str:
@@ -459,6 +495,7 @@ class ProductionPhase7Driver:
             services.github,
             repository=request.environment.get("GITHUB_REPOSITORY", ""),
             track_author=cfg.review.track_author,
+            repo_root=request.repo_root,
         )
         _seed_tracking(services.github, spec=spec, request=request)
         classifier_key = request.environment.get(cfg.review.api_key_env, "")

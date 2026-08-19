@@ -13,7 +13,7 @@ from agent.github_api import GitHubClient, github_client_from_env
 from agent.pr import is_same_work_unit_pull, parse_work_unit_marker
 from agent.review_collect import head_repo_full_name, head_sha_from_pull
 from agent.review_filter import is_configured_actor
-from agent.spec import parse_spec
+from agent.spec import TaskSpec, parse_spec, parse_spec_text
 
 
 @dataclass(frozen=True)
@@ -115,6 +115,59 @@ def find_spec_by_id(
     return matches[0]
 
 
+def find_spec_by_id_at_ref(
+    client: GitHubClient,
+    spec_id: str,
+    *,
+    ref: str,
+    spec_directory: str,
+) -> tuple[str, TaskSpec]:
+    """Resolve a Task Spec from GitHub at an exact commit SHA. Ignores the checkout tree."""
+    matches: list[tuple[str, TaskSpec]] = []
+    for path in _markdown_paths_at_ref(client, spec_directory, ref):
+        text = client.get_content(path, ref=ref)
+        try:
+            spec = parse_spec_text(text, source_path=path)
+        except AgentError:
+            continue
+        if spec.id == spec_id:
+            matches.append((path, spec))
+    if not matches:
+        raise AgentError.escalation_required(
+            f"no Task Spec found for spec_id {spec_id!r} at {ref}",
+            code="SPEC_NOT_FOUND",
+        )
+    if len(matches) > 1:
+        raise AgentError.escalation_required(
+            f"duplicate Task Spec id {spec_id!r} at {ref}",
+            code="DUPLICATE_SPEC_ID",
+        )
+    return matches[0]
+
+
+def _markdown_paths_at_ref(client: GitHubClient, directory: str, ref: str) -> list[str]:
+    try:
+        entries = client.list_contents(directory, ref=ref)
+    except AgentError as exc:
+        if exc.code == "GITHUB_NOT_FOUND":
+            raise AgentError.escalation_required(
+                f"task spec directory not found at {ref}: {directory}",
+                code="SPEC_NOT_FOUND",
+            ) from exc
+        raise
+    paths: list[str] = []
+    for entry in entries:
+        entry_path = str(entry.get("path") or "").replace("\\", "/")
+        entry_type = str(entry.get("type") or "")
+        if not entry_path:
+            continue
+        if entry_type == "dir":
+            paths.extend(_markdown_paths_at_ref(client, entry_path, ref))
+        elif entry_type == "file" and entry_path.endswith(".md"):
+            paths.append(entry_path)
+    return paths
+
+
 def prepare_review(
     *,
     repo_root: Path | str,
@@ -160,14 +213,18 @@ def prepare_review(
             head_sha=head_sha,
             reason="pull request is not an orchestrator work unit",
         )
-    spec_path = find_spec_by_id(repo_root, marker["spec_id"], config=cfg)
-    spec = parse_spec(spec_path)
+    spec_path, spec = find_spec_by_id_at_ref(
+        client,
+        marker["spec_id"],
+        ref=head_sha,
+        spec_directory=cfg.task_spec.directory,
+    )
     if not is_same_work_unit_pull(spec, pull):
         return _skip(
             pull_number=number,
             head_sha=head_sha,
             spec_id=spec.id,
-            spec_path=_rel(spec_path, repo_root),
+            spec_path=spec_path,
             reason="pull request does not match the work-unit marker",
         )
     return ReviewPrepareResult(
@@ -175,17 +232,9 @@ def prepare_review(
         pull_number=number,
         head_sha=head_sha,
         spec_id=spec.id,
-        spec_path=_rel(spec_path, repo_root),
+        spec_path=spec_path,
         reason="ok",
     )
-
-
-def _rel(path: Path, repo_root: Path | str) -> str:
-    root = Path(repo_root).resolve()
-    try:
-        return path.resolve().relative_to(root).as_posix()
-    except ValueError:
-        return path.as_posix().replace("\\", "/")
 
 
 def _skip(

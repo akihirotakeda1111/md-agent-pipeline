@@ -43,6 +43,7 @@ ESCALATE_CODES = frozenset(
         "REPORT_SPEC_MISMATCH",
         "REPORT_BRANCH_MISMATCH",
         "BASE_SHA_MISMATCH",
+        "PULL_HEAD_MISMATCH",
         "BASE_SHA_MISSING",
         "DIRTY_WORKTREE",
         "NON_FAST_FORWARD",

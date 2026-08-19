@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import subprocess
@@ -131,8 +132,19 @@ def _repo(tmp_path: Path, *, limit: int = 3) -> Path:
     return repo
 
 
+def _spec_files(repo: Path) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for path in (repo / "specs" / "tasks").rglob("*.md"):
+        files[path.relative_to(repo).as_posix()] = path.read_text(encoding="utf-8")
+    return files
+
+
 def _spec(repo: Path):
     return parse_spec(repo / "specs" / "tasks" / "review-demo.md")
+
+
+def _fake(repo: Path, spec) -> FakeGithub:
+    return FakeGithub(_pull(repo, spec), files=_spec_files(repo))
 
 
 def _pull(repo: Path, spec) -> dict:
@@ -204,8 +216,9 @@ def _dummy_spec() -> TaskSpec:
 
 
 class FakeGithub:
-    def __init__(self, pull: dict) -> None:
+    def __init__(self, pull: dict, *, files: dict[str, str] | None = None) -> None:
         self.pull = pull
+        self.files = dict(files or {})
         self.reviews: list[dict] = []
         self.review_comments: list[dict] = []
         self.issue_comments: list[dict] = []
@@ -237,6 +250,10 @@ class FakeGithub:
     def requester(self, method: str, url: str, headers: dict[str, str], data: bytes | None):
         parsed = urlparse(url)
         path = parsed.path
+        query = parse_qs(parsed.query)
+        if method == "GET" and "/contents/" in path:
+            relative = unquote(path.split("/contents/", 1)[1])
+            return self._contents(relative, (query.get("ref") or [""])[0], url)
         if method == "GET" and path.endswith("/pulls/7"):
             return 200, self.pull
         if method == "GET" and path.endswith("/pulls/7/reviews"):
@@ -279,6 +296,31 @@ class FakeGithub:
         if method == "DELETE" and "/labels/" in path:
             return 200, []
         raise AssertionError(f"unexpected GitHub call {method} {url} {parse_qs(parsed.query)}")
+
+    def _contents(self, relative: str, ref: str, url: str):
+        if relative in self.files:
+            encoded = base64.b64encode(self.files[relative].encode("utf-8")).decode("ascii")
+            return 200, {
+                "type": "file",
+                "path": relative,
+                "encoding": "base64",
+                "content": encoded,
+            }
+        prefix = relative + "/"
+        children: dict[str, dict[str, str]] = {}
+        for file_path in self.files:
+            if not file_path.startswith(prefix) and relative:
+                continue
+            rest = file_path[len(prefix) :] if relative else file_path
+            name = rest.split("/", 1)[0]
+            child_path = f"{prefix}{name}" if relative else name
+            if "/" in rest:
+                children[name] = {"type": "dir", "path": child_path, "name": name}
+            else:
+                children[name] = {"type": "file", "path": file_path, "name": name}
+        if children:
+            return 200, list(children.values())
+        raise HTTPError(url, 404, "Not Found", hdrs={}, fp=BytesIO(b'{"message":"Not Found"}'))
 
     def client(self) -> GitHubClient:
         return GitHubClient(token="tok", repository="octo/repo", requester=self.requester)
@@ -360,6 +402,52 @@ def test_prepare_skips_pull_number_mismatch(tmp_path: Path) -> None:
     )
     assert result.should_review is False
     assert "identity" in result.reason
+
+
+def test_prepare_resolves_spec_from_api_head_not_checkout_tree(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    files = _spec_files(repo)
+    (repo / "specs" / "tasks" / "review-demo.md").unlink()
+    fake = FakeGithub(_pull(repo, spec), files=files)
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={"sender": {"login": ACTOR}, "pull_request": {"number": 7}},
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is True
+    assert result.spec_path == "specs/tasks/review-demo.md"
+    assert result.spec_id == spec.id
+    assert result.head_sha == head_sha(repo)
+
+
+def test_run_review_refuses_stale_api_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = "0" * 40
+    result = _run(repo, FakeGithub(pull))
+    assert result.outcome == "ESCALATED"
+    assert result.code == "PULL_HEAD_MISMATCH"
+
+
+def test_run_review_refuses_workspace_that_is_not_expected_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    merge_sha = "d" * 40
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = merge_sha
+    result = run_review(
+        repo_root=repo,
+        pull_number=7,
+        head_sha_expected=merge_sha,
+        spec_path="specs/tasks/review-demo.md",
+        github=FakeGithub(pull).client(),
+        env={"CODEX_API_KEY": "codex-secret", "REVIEW_CLASSIFIER_API_KEY": "review-secret"},
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.code == "BASE_SHA_MISMATCH"
 
 
 def test_duplicate_and_processed_reviews_are_ignored(tmp_path: Path) -> None:

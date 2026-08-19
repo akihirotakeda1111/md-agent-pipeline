@@ -7,16 +7,19 @@ Official references (verified 2026-08-17 / 2026-08-19):
 - Labels: https://docs.github.com/en/rest/issues/labels
 - Issue comments: https://docs.github.com/en/rest/issues/comments
 - Create issue: https://docs.github.com/en/rest/issues/issues
+- Contents: https://docs.github.com/en/rest/repos/contents
 - Headers: Accept application/vnd.github+json, Authorization Bearer,
   X-GitHub-Api-Version 2026-03-10
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -213,6 +216,60 @@ class GitHubClient:
             )
         return response.payload
 
+    def get_content(self, path: str, *, ref: str) -> str:
+        """Return the UTF-8 text of a file at an exact git ref (commit SHA or branch)."""
+        relative = _safe_repo_path(path)
+        commit = _require_git_ref(ref)
+        response = self.request(
+            "GET",
+            f"/repos/{self.owner}/{self.repo}/contents/{quote(relative, safe='/')}",
+            query={"ref": commit},
+        )
+        payload = response.payload
+        if not isinstance(payload, dict) or payload.get("type") != "file":
+            raise AgentError.environment_failure(
+                f"GitHub content is not a file: {relative}",
+                code="GITHUB_API_FAILURE",
+            )
+        encoding = payload.get("encoding")
+        content = payload.get("content")
+        if encoding != "base64" or not isinstance(content, str):
+            raise AgentError.environment_failure(
+                f"GitHub file content is not base64: {relative}",
+                code="GITHUB_API_FAILURE",
+            )
+        try:
+            raw = base64.b64decode(content.encode("ascii"), validate=False)
+            return raw.decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise AgentError.environment_failure(
+                f"GitHub file content could not be decoded: {relative}",
+                code="GITHUB_API_FAILURE",
+            ) from exc
+
+    def list_contents(self, path: str, *, ref: str) -> list[dict[str, Any]]:
+        """Return immediate children of a directory at an exact git ref."""
+        relative = _safe_repo_path(path)
+        commit = _require_git_ref(ref)
+        response = self.request(
+            "GET",
+            f"/repos/{self.owner}/{self.repo}/contents/{quote(relative, safe='/')}",
+            query={"ref": commit},
+        )
+        payload = response.payload
+        if not isinstance(payload, list):
+            raise AgentError.environment_failure(
+                f"GitHub content is not a directory: {relative}",
+                code="GITHUB_API_FAILURE",
+            )
+        entries = [item for item in payload if isinstance(item, dict)]
+        if len(entries) != len(payload):
+            raise AgentError.environment_failure(
+                f"GitHub directory listing is malformed: {relative}",
+                code="GITHUB_API_FAILURE",
+            )
+        return entries
+
     def list_reviews(self, pull_number: int) -> list[dict[str, Any]]:
         return self._list_paginated(f"/repos/{self.owner}/{self.repo}/pulls/{pull_number}/reviews")
 
@@ -354,3 +411,19 @@ def _payload_message(payload: Any) -> str:
     if isinstance(payload, str) and payload.strip():
         return payload
     return "unknown error"
+
+
+def _require_git_ref(ref: str) -> str:
+    value = ref.strip()
+    if not value:
+        raise AgentError.invalid_input("git ref is required to read repository content")
+    return value
+
+
+def _safe_repo_path(path: str) -> str:
+    relative = path.replace("\\", "/").strip("/")
+    if not relative or relative.startswith("/") or Path(relative).is_absolute():
+        raise AgentError.invalid_input(f"invalid repository content path: {path!r}")
+    if any(part in {"", ".", ".."} for part in relative.split("/")):
+        raise AgentError.invalid_input(f"invalid repository content path: {path!r}")
+    return relative

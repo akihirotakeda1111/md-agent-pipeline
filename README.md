@@ -131,7 +131,7 @@ python agent/integration-tests/github-pr-e2e/run.py --repo OWNER/REPO
 
 ### Phase 7 — CodeRabbit Review
 
-CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workflow `.github/workflows/agent-review.yml` が `pull_request_review` / `pull_request_review_comment` / `issue_comment` を受け、GitHub API から現状を再取得します。LLM API は unit test で mock します。
+CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workflow `.github/workflows/agent-review.yml` が `pull_request_review` / `pull_request_review_comment` / `issue_comment` を受け、GitHub API から現状を再取得します。prepare は repository default の Orchestrator を使い、Task Spec は `pull.head.sha` の Contents API から解決します。review job の repair workspace は exact `pull.head.sha` です。LLM API は unit test で mock します。
 
 ```bash
 python -m pytest agent/tests/test_phase7.py agent/tests/test_review_workflow.py

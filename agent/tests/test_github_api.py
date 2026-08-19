@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
 
 import pytest
-from agent.errors import AgentError
+from agent.errors import AgentError, ErrorCategory
 from agent.github_api import GitHubClient, Requester
 from agent.labels import PHASE6_APPLIED_LABELS, ensure_agent_labels
 
@@ -109,3 +109,57 @@ def test_label_get_encodes_colon() -> None:
     assert _client(requester).get_label("agent:ready") is None
     assert urls[0].endswith("/labels/agent%3Aready")
     assert unquote(urls[0].rsplit("/", 1)[-1]) == "agent:ready"
+
+
+def test_get_content_decodes_base64_at_ref() -> None:
+    urls: list[str] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        urls.append(url)
+        return 200, {
+            "type": "file",
+            "encoding": "base64",
+            "content": "LS0tCmlkOiBkZW1vCi0tLQo=",
+        }
+
+    text = _client(requester).get_content("specs/tasks/demo.md", ref="abc123")
+    assert text.startswith("---")
+    assert "/contents/specs/tasks/demo.md" in urls[0]
+    assert "ref=abc123" in urls[0]
+
+
+def test_get_content_rejects_directory_payload() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        return 200, [{"type": "file", "path": "specs/tasks/demo.md", "name": "demo.md"}]
+
+    with pytest.raises(AgentError) as caught:
+        _client(requester).get_content("specs/tasks", ref="abc123")
+    assert caught.value.code == "GITHUB_API_FAILURE"
+
+
+def test_get_content_rejects_empty_ref() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise AssertionError("must not call GitHub without a ref")
+
+    with pytest.raises(AgentError) as caught:
+        _client(requester).get_content("specs/tasks/demo.md", ref="  ")
+    assert caught.value.category is ErrorCategory.INVALID_INPUT
+
+
+def test_list_contents_returns_directory_entries() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        return 200, [
+            {"type": "file", "path": "specs/tasks/demo.md", "name": "demo.md"},
+            {"type": "dir", "path": "specs/tasks/nested", "name": "nested"},
+        ]
+
+    entries = _client(requester).list_contents("specs/tasks", ref="abc123")
+    assert [item["name"] for item in entries] == ["demo.md", "nested"]

@@ -2,7 +2,8 @@
 #
 # Event payloads are wake-up signals only. The review job re-fetches the
 # Pull Request, reviews, and comments through the GitHub API, then checks
-# out pull.head.sha from that API response.
+# out pull.head.sha from that API response. Orchestrator code is loaded
+# from the repository default branch; the PR head is only the repair workspace.
 #
 # Security:
 # - pull_request_target is forbidden.
@@ -11,6 +12,7 @@
 # - Classifier and Codex secrets are injected only on the orchestrator step.
 # - Codex never receives REVIEW_CLASSIFIER_API_KEY or GITHUB_TOKEN.
 # - Merge is never performed.
+# - Repair never runs against the default branch or a pull_request merge SHA.
 #
 # Concurrency:
 # - Workflow-level group is the PR number so simultaneous review events on the
@@ -57,10 +59,10 @@ jobs:
       spec_id: ${{ steps.gate.outputs.spec_id }}
       spec_path: ${{ steps.gate.outputs.spec_path }}
     steps:
-      - name: Checkout default ref
+      - name: Checkout trusted orchestrator
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - name: Set up Python
@@ -93,11 +95,11 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - name: Checkout pull head
+      - name: Checkout trusted orchestrator
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.head_sha }}
-          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          path: _trusted
           persist-credentials: false
 
       - name: Set up Python
@@ -105,8 +107,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install orchestrator
-        run: python -m pip install -e .
+      - name: Isolate trusted orchestrator from the repair workspace
+        run: mv _trusted "${{ runner.temp }}/orchestrator"
+
+      - name: Install trusted orchestrator
+        run: python -m pip install -e "${{ runner.temp }}/orchestrator"
+
+      - name: Checkout pull head workspace
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -136,4 +148,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_API_URL: ${{ github.api_url }}
-        run: python agent/scripts/run-review.py --pull-number "${{ needs.prepare.outputs.pull_number }}" --head-sha "${{ needs.prepare.outputs.head_sha }}" --spec "${{ needs.prepare.outputs.spec_path }}"
+        run: python "${{ runner.temp }}/orchestrator/agent/scripts/run-review.py" --repo-root "${{ github.workspace }}" --pull-number "${{ needs.prepare.outputs.pull_number }}" --head-sha "${{ needs.prepare.outputs.head_sha }}" --spec "${{ needs.prepare.outputs.spec_path }}"

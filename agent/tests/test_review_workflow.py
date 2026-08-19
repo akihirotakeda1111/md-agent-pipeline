@@ -60,27 +60,59 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
         "pull-requests": "write",
         "issues": "write",
     }
-    checkout = next(
+    checkouts = [
         step
         for step in review["steps"]
         if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert len(checkouts) == 2
+    trusted, workspace = checkouts
+    assert trusted["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert trusted["with"]["path"] == "_trusted"
+    assert trusted["with"]["persist-credentials"] is False
+    assert workspace["with"]["ref"] == "${{ needs.prepare.outputs.head_sha }}"
+    assert workspace["with"]["persist-credentials"] is False
+    assert workspace["with"]["fetch-depth"] == 0
+    assert "path" not in workspace["with"]
+    install = next(
+        step
+        for step in review["steps"]
+        if "pip install" in str(step.get("run", ""))
     )
-    assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.head_sha }}"
-    assert checkout["with"]["persist-credentials"] is False
-    assert checkout["with"]["fetch-depth"] == 0
+    assert "${{ runner.temp }}/orchestrator" in install["run"]
+    assert "pip install -e ." not in install["run"].replace(
+        "${{ runner.temp }}/orchestrator", ""
+    )
     secret_steps = [step for step in review["steps"] if "CODEX_API_KEY" in yaml.safe_dump(step)]
     assert len(secret_steps) == 1
     env = secret_steps[0]["env"]
     assert env["CODEX_API_KEY"] == "${{ secrets.CODEX_API_KEY }}"
     assert env["REVIEW_CLASSIFIER_API_KEY"] == "${{ secrets.REVIEW_CLASSIFIER_API_KEY }}"
-    assert "run-review.py" in secret_steps[0]["run"]
+    run = secret_steps[0]["run"]
+    assert "run-review.py" in run
+    assert "${{ runner.temp }}/orchestrator" in run
+    assert "--repo-root" in run
+    assert "${{ github.workspace }}" in run
+    assert "${{ needs.prepare.outputs.head_sha }}" in run
     bootstrap = next(
         step
         for step in review["steps"]
         if str(step.get("uses", "")).startswith("openai/codex-action@")
     )
     assert bootstrap["with"]["openai-api-key"] == "unused-bootstrap-placeholder"
-    assert "merge" not in secret_steps[0]["run"].lower()
+    assert "merge" not in run.lower()
+
+
+def test_prepare_job_loads_trusted_default_branch() -> None:
+    payload, _ = _load(WORKFLOW)
+    prepare = payload["jobs"]["prepare"]
+    checkout = next(
+        step
+        for step in prepare["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_coderabbit_yaml_keeps_incremental_review() -> None:

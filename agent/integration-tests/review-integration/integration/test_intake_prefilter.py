@@ -26,7 +26,7 @@ def test_event_is_only_wakeup_and_current_feedback_is_refetched(
     phase7_driver.run_review(
         request(spec_path, git_repo, object_id="wake-up-object-not-in-current-set"), services
     )
-    assert len(services.github.calls("get_pull_request")) == 1
+    assert len(services.github.calls("get_pull_request")) == 2
     assert len(services.github.calls("list_review_feedback")) == 1
     assert services.classifier.invocations[0]["payload"]["body"] == feedback["body"]
 

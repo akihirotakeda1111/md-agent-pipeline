@@ -45,7 +45,7 @@ from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error, is_failed
 from agent.pr import parse_work_unit_marker
 from agent.review_classify import classify_review_comment
-from agent.review_collect import collect_review_feedback
+from agent.review_collect import collect_review_feedback, head_sha_from_pull
 from agent.review_filter import applies_to_current_head, prefilter_reason
 from agent.review_policy import decide_review_policy
 from agent.review_prepare import find_spec_by_id
@@ -164,6 +164,18 @@ def _run_review(
     codex_key: str | None,
 ) -> ReviewResult:
     actual_head = head_sha(root)
+    pull = client.get_pull(pull_number)
+    api_head = head_sha_from_pull(pull)
+    if not api_head:
+        raise AgentError.environment_failure(
+            "pull request head sha is missing",
+            code="GITHUB_API_FAILURE",
+        )
+    if api_head != head_sha_expected:
+        raise AgentError.escalation_required(
+            f"API pull.head.sha {api_head} does not match expected workspace {head_sha_expected}",
+            code="PULL_HEAD_MISMATCH",
+        )
     if actual_head != head_sha_expected:
         raise AgentError.escalation_required(
             f"HEAD {actual_head} does not match pull head {head_sha_expected}",
@@ -171,7 +183,6 @@ def _run_review(
         )
     spec = parse_spec(root / spec_path) if spec_path else None
     if spec is None:
-        pull = client.get_pull(pull_number)
         marker = parse_work_unit_marker(str(pull.get("body") or ""))
         if marker is None:
             raise AgentError.escalation_required(
