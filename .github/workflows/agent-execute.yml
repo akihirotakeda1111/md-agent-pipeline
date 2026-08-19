@@ -46,6 +46,7 @@
 # - https://github.com/actions/checkout (persist-credentials, fetch-depth)
 # - https://github.com/actions/setup-python
 # - https://github.com/actions/setup-node
+# - https://github.com/actions/setup-go
 # - https://github.com/openai/codex-action
 # - https://github.com/actions/upload-artifact
 # - https://github.com/actions/download-artifact
@@ -134,6 +135,13 @@ jobs:
       - name: Assert history and execution guard
         run: python agent/scripts/prepare-execute.py --spec "${{ needs.parse-spec.outputs.spec_path }}"
 
+      - name: Set up Go for TODO baseline
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/todo-api/go.mod
+          check-latest: false
+          cache: false
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -192,6 +200,13 @@ jobs:
 
       - name: Install orchestrator
         run: python -m pip install -e .
+
+      - name: Set up Go for TODO baseline
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/todo-api/go.mod
+          check-latest: false
+          cache: false
 
       - name: Download work report
         uses: actions/download-artifact@v7
