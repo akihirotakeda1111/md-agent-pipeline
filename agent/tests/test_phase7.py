@@ -346,6 +346,22 @@ def test_prepare_skips_fork_pull_request(tmp_path: Path) -> None:
     assert "fork" in result.reason
 
 
+def test_prepare_skips_pull_number_mismatch(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["number"] = 99
+    fake = FakeGithub(pull)
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={"sender": {"login": ACTOR}, "pull_request": {"number": 7}},
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "identity" in result.reason
+
+
 def test_duplicate_and_processed_reviews_are_ignored(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     spec = _spec(repo)

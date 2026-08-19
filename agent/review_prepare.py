@@ -134,6 +134,12 @@ def prepare_review(
             pull_number=number, reason="event actor is not the configured CodeRabbit actor"
         )
     pull = client.get_pull(number)
+    api_number = pull.get("number")
+    if not isinstance(api_number, int) or isinstance(api_number, bool) or api_number != number:
+        return _skip(
+            pull_number=number,
+            reason="pull request identity does not match the wake-up event",
+        )
     if str(pull.get("state") or "") != "open":
         return _skip(pull_number=number, reason="pull request is not open")
     head_repo = head_repo_full_name(pull)
