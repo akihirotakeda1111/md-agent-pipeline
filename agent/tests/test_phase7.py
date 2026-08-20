@@ -248,6 +248,7 @@ class FakeGithub:
         self.commit_statuses: list[dict] = []
         self.commit_pulls: list[dict] | None = None
         self.labels: set[str] = set()
+        self.issue_labels: set[str] = set()
         self.next_id = 200
 
     def add_check_run(
@@ -356,7 +357,7 @@ class FakeGithub:
             return 201, payload
         if method == "POST" and path.endswith("/issues/7/labels"):
             payload = json.loads(data or b"{}")
-            self.labels.update(str(name) for name in payload.get("labels", []))
+            self.issue_labels.update(str(name) for name in payload.get("labels", []))
             return 200, []
         if method == "POST" and path.endswith("/issues/7/comments"):
             payload = json.loads(data or b"{}")
@@ -376,6 +377,10 @@ class FakeGithub:
                     comment["body"] = payload["body"]
                     return 200, comment
             raise AssertionError(f"missing comment {comment_id}")
+        if method == "DELETE" and "/issues/" in path and "/labels/" in path:
+            name = unquote(path.rsplit("/", 1)[-1])
+            self.issue_labels.discard(name)
+            return 200, []
         if method == "DELETE" and "/labels/" in path:
             return 200, []
         raise AssertionError(f"unexpected GitHub call {method} {url} {parse_qs(parsed.query)}")
@@ -426,6 +431,20 @@ def _run(
         executor=executor,
         env={"CODEX_API_KEY": "codex-secret", "REVIEW_CLASSIFIER_API_KEY": "review-secret"},
     )
+
+
+def _assert_exclusive_issue_label(fake: FakeGithub, expected: str) -> None:
+    statuses = {"agent:review", "agent:ready", "agent:escalated", "agent:failed"}
+    assert expected in fake.issue_labels
+    assert not (fake.issue_labels & statuses) - {expected}
+
+
+def _escalation_notices(fake: FakeGithub) -> list[dict]:
+    return [
+        comment
+        for comment in fake.issue_comments
+        if str(comment.get("body") or "").startswith("## Agent escalation")
+    ]
 
 
 def _tracking_comments(fake: FakeGithub) -> list[dict]:
@@ -695,9 +714,15 @@ def test_completed_terminal_with_no_feedback_is_ready(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_check_run(head_sha=head_sha(repo))
-    result = _run(repo, fake, classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE))
+    result = _run(
+        repo,
+        fake,
+        classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
+    )
     assert result.outcome == "READY_FOR_HUMAN"
     assert result.review_attempts == 0
+    _assert_exclusive_issue_label(fake, "agent:ready")
+    _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
 
 
 def test_skipped_terminal_escalates_without_classifier(tmp_path: Path) -> None:
@@ -719,7 +744,25 @@ def test_skipped_terminal_escalates_without_classifier(tmp_path: Path) -> None:
     assert result.outcome == "ESCALATED"
     assert result.code == "CODERABBIT_SKIPPED"
     assert called["n"] == 0
-    assert "agent:escalated" in fake.labels
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    assert len(_escalation_notices(fake)) == 1
+
+
+def test_skipped_terminal_rerun_keeps_outcome_and_one_notice(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="skipped")
+    first = _run(repo, fake)
+    assert first.outcome == "ESCALATED"
+    assert first.code == "CODERABBIT_SKIPPED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    assert len(_escalation_notices(fake)) == 1
+    second = _run(repo, fake)
+    assert second.outcome == "ESCALATED"
+    assert second.code == "CODERABBIT_SKIPPED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    assert len(_escalation_notices(fake)) == 1
 
 
 def test_failed_terminal_escalates_without_ready(tmp_path: Path) -> None:
@@ -730,14 +773,22 @@ def test_failed_terminal_escalates_without_ready(tmp_path: Path) -> None:
     result = _run(repo, fake)
     assert result.outcome == "ESCALATED"
     assert result.code == "CODERABBIT_REVIEW_FAILED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
 
 
 def test_no_terminal_and_no_feedback_stays_in_review(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     spec = _spec(repo)
-    result = _run(repo, FakeGithub(_pull(repo, spec)))
+    fake = FakeGithub(_pull(repo, spec))
+    result = _run(repo, fake)
     assert result.outcome == "IN_REVIEW"
     assert "terminal evidence" in result.message
+    _assert_exclusive_issue_label(fake, "agent:review")
+    tracking = _tracking_comments(fake)
+    if tracking:
+        parsed = parse_review_track(tracking[0]["body"])
+        assert parsed is not None
+        assert parsed.head_sha == ""
 
 
 def test_old_head_completed_terminal_is_ignored(tmp_path: Path) -> None:
@@ -747,6 +798,7 @@ def test_old_head_completed_terminal_is_ignored(tmp_path: Path) -> None:
     fake.add_check_run(head_sha="0" * 40)
     result = _run(repo, fake)
     assert result.outcome == "IN_REVIEW"
+    _assert_exclusive_issue_label(fake, "agent:review")
 
 
 def test_commit_status_completed_allows_ready(tmp_path: Path) -> None:
@@ -756,6 +808,8 @@ def test_commit_status_completed_allows_ready(tmp_path: Path) -> None:
     fake.add_commit_status(sha=head_sha(repo), state="success")
     result = _run(repo, fake)
     assert result.outcome == "READY_FOR_HUMAN"
+    _assert_exclusive_issue_label(fake, "agent:ready")
+    _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
 
 
 def test_commit_status_ambiguous_success_escalates(tmp_path: Path) -> None:
@@ -766,6 +820,7 @@ def test_commit_status_ambiguous_success_escalates(tmp_path: Path) -> None:
     result = _run(repo, fake)
     assert result.outcome == "ESCALATED"
     assert result.code == "CODERABBIT_AMBIGUOUS"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
 
 
 def test_commit_status_history_latest_completed_allows_ready(tmp_path: Path) -> None:
@@ -799,6 +854,8 @@ def test_commit_status_history_latest_completed_allows_ready(tmp_path: Path) -> 
     )
     result = _run(repo, fake)
     assert result.outcome == "READY_FOR_HUMAN"
+    _assert_exclusive_issue_label(fake, "agent:ready")
+    _assert_single_durable_tracking_comment(fake, spec=spec, head=sha)
 
 
 def test_commit_status_skipped_escalates(tmp_path: Path) -> None:
@@ -809,6 +866,7 @@ def test_commit_status_skipped_escalates(tmp_path: Path) -> None:
     result = _run(repo, fake)
     assert result.outcome == "ESCALATED"
     assert result.code == "CODERABBIT_SKIPPED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
 
 
 def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:
@@ -824,6 +882,8 @@ def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:
     )
     result = _run(repo, fake)
     assert result.outcome == "IN_REVIEW"
+    assert "in progress" in result.message
+    _assert_exclusive_issue_label(fake, "agent:review")
 
 
 def test_prepare_resolves_check_run_without_pull_number(tmp_path: Path) -> None:
@@ -1049,10 +1109,12 @@ def test_no_feedback_ready_keeps_one_tracking_comment_across_reruns(tmp_path: Pa
     first = _run(repo, fake)
     assert first.outcome == "READY_FOR_HUMAN"
     assert first.code != "UNSAFE_REVIEW_TRACK"
+    _assert_exclusive_issue_label(fake, "agent:ready")
     track_id = _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
     second = _run(repo, fake)
     assert second.outcome == "READY_FOR_HUMAN"
     assert second.code != "UNSAFE_REVIEW_TRACK"
+    _assert_exclusive_issue_label(fake, "agent:ready")
     _assert_single_durable_tracking_comment(
         fake, spec=spec, head=head_sha(repo), previous_id=track_id
     )
@@ -1071,6 +1133,7 @@ def test_non_actionable_ready_keeps_one_tracking_comment_across_reruns(tmp_path:
     first = _run(repo, fake, classifier=classifier)
     assert first.outcome == "READY_FOR_HUMAN"
     assert first.code != "UNSAFE_REVIEW_TRACK"
+    _assert_exclusive_issue_label(fake, "agent:ready")
     track_id = _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
     parsed = parse_review_track(_tracking_comments(fake)[0]["body"])
     assert parsed is not None
@@ -1078,6 +1141,7 @@ def test_non_actionable_ready_keeps_one_tracking_comment_across_reruns(tmp_path:
     second = _run(repo, fake, classifier=classifier)
     assert second.outcome == "READY_FOR_HUMAN"
     assert second.code != "UNSAFE_REVIEW_TRACK"
+    _assert_exclusive_issue_label(fake, "agent:ready")
     _assert_single_durable_tracking_comment(
         fake, spec=spec, head=head_sha(repo), previous_id=track_id
     )

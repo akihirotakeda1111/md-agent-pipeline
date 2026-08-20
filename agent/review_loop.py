@@ -49,8 +49,12 @@ from agent.review_collect import collect_review_feedback, head_sha_from_pull
 from agent.review_filter import applies_to_current_head, prefilter_reason
 from agent.review_policy import decide_review_policy
 from agent.review_prepare import find_spec_by_id
-from agent.review_terminal import CodeRabbitTerminal, collect_coderabbit_terminal
 from agent.review_prompt import build_review_repair_prompt
+from agent.review_terminal import (
+    CodeRabbitTerminal,
+    CodeRabbitTerminalKind,
+    collect_coderabbit_terminal,
+)
 from agent.review_track import (
     REVIEW_STATE_START,
     ReviewTrack,
@@ -192,7 +196,6 @@ def _run_review(
             )
         spec = parse_spec(find_spec_by_id(root, marker["spec_id"], config=cfg))
     ensure_review_labels(client)
-    apply_status_label(client, pull_number, "agent:review")
     track_id, track = load_review_track(
         client, pull_number, spec, track_author=cfg.review.track_author
     )
@@ -206,6 +209,7 @@ def _run_review(
             f"CodeRabbit terminal is {terminal.kind.value}",
             terminal.escalation_code(),
         )
+    apply_status_label(client, pull_number, "agent:review")
     items = collect_review_feedback(client, pull_number, actor=cfg.coderabbit.actor)
     emit(
         REVIEW_COLLECTED,
@@ -620,6 +624,14 @@ def persist_review_track(
     return comment_id
 
 
+def _has_escalation_comment(client: GitHubClient, pull_number: int, reason: str) -> bool:
+    needle = f"- Reason: {reason}"
+    for comment in client.list_issue_comments(pull_number):
+        if needle in str(comment.get("body") or ""):
+            return True
+    return False
+
+
 def _comment_login(comment: dict[str, Any]) -> str:
     user = comment.get("user")
     if isinstance(user, dict):
@@ -653,12 +665,12 @@ def _convergence_result(
             "unprocessed review comments remain on the current HEAD",
         )
     if not terminal.is_completed():
-        return _in_review(
-            spec,
-            pull_number,
-            track,
-            "no CodeRabbit terminal evidence on the current HEAD yet",
+        waiting = (
+            "CodeRabbit review is still in progress on the current HEAD"
+            if terminal.kind is CodeRabbitTerminalKind.IN_PROGRESS
+            else "no CodeRabbit terminal evidence on the current HEAD yet"
         )
+        return _in_review(spec, pull_number, track, waiting)
     bound = with_processed(track, (), increment=False, head_sha=head_sha_expected)
     persist_review_track(client, pull_number, track_id, bound)
     return _ready(client, spec, pull_number, bound, message)
@@ -720,7 +732,9 @@ def _escalate(
         ),
         mention=mention_from_config(),
     )
-    client.create_issue_comment(pull_number, notice.to_markdown())
+    body = notice.to_markdown()
+    if not _has_escalation_comment(client, pull_number, notice.reason):
+        client.create_issue_comment(pull_number, body)
     emit(REVIEW_ESCALATED, message, task_id=spec.id, phase="review", extra={"code": code})
     return ReviewResult(
         outcome="ESCALATED",
