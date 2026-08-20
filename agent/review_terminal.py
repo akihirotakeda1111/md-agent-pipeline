@@ -5,10 +5,11 @@ check runs and commit statuses for an exact HEAD SHA, then keeps only
 entries whose app slug, status context, or creator login matches config.
 
 Live COMPLETED/SKIPPED payloads could not be captured here (GitHub auth 401).
-Both GitHub transports are therefore collected: Checks (`review_progress`)
-and legacy commit statuses (`reviews.commit_status`). The latest matching
-completed item on the requested SHA wins. An in-progress item on that SHA
-blocks READY.
+Both GitHub transports are therefore collected after wake-up: Checks
+(`review_progress`) and commit statuses (`reviews.commit_status`). The latest
+matching completed item on the requested SHA wins. An in-progress item on
+that SHA blocks READY. Wake-up still accepts both events until Real E2E
+locks a single transport.
 """
 
 from __future__ import annotations

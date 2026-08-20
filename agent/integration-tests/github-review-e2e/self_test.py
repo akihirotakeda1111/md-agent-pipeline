@@ -426,6 +426,7 @@ class HarnessTests(unittest.TestCase):
                             },
                             "review_status": True,
                             "review_progress": True,
+                            "commit_status": True,
                             "finishing_touches": {"autofix": {"enabled": False}},
                         }
                     }
@@ -436,6 +437,7 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(result["coderabbit_actor"], "observed-review-actor")
             self.assertEqual(result["coderabbit_check_app_slug"], "observed-app")
             self.assertEqual(result["coderabbit_status_context"], "ObservedRabbit")
+            self.assertTrue(result["coderabbit"]["commit_status"])
             self.assertIn(".agent/phases/07-coderabbit-review.md", result["files"])
 
     def test_report_has_scenarios_cleanup_and_classification_fields(self) -> None:
@@ -449,6 +451,7 @@ class HarnessTests(unittest.TestCase):
             "result",
         ):
             self.assertIn(key, report)
+        self.assertIn("terminal_transports", report["scenario_a"])
         with tempfile.TemporaryDirectory() as temp:
             saved = runner.save_report(Path(temp), report)
             self.assertEqual(json.loads(saved.read_text())["scenario_id"], report["scenario_id"])

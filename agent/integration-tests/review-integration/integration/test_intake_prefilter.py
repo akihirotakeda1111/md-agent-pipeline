@@ -87,6 +87,23 @@ def test_pr_work_unit_or_head_mismatch_fails_closed(
     assert services.classifier.invocations == []
 
 
+def test_stale_terminal_event_sha_is_skipped_before_classifier(
+    phase7_driver, spec_path, git_repo, service_factory
+):
+    services = service_factory(
+        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        classifier=[classification("ACTIONABLE")],
+        codex=[CodexStep({"app/review.txt": "repaired\n"})],
+    )
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, head_sha="0" * 40), services
+    )
+    assert result.status.upper() in {"SKIPPED", "REJECTED", "ESCALATED"}
+    assert result.status.upper() != "READY_FOR_HUMAN"
+    assert_no_codex(services)
+    assert services.classifier.invocations == []
+
+
 def test_outdated_feedback_is_skipped_before_classifier(
     phase7_driver, spec_path, git_repo, service_factory
 ):

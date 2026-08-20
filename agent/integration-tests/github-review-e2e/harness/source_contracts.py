@@ -76,6 +76,8 @@ def inspect_source_contracts(
         raise EnvironmentBlocker("CodeRabbit review_status is not enabled")
     if reviews.get("review_progress") is not True:
         raise EnvironmentBlocker("CodeRabbit review_progress is not enabled")
+    if reviews.get("commit_status") is not True:
+        raise EnvironmentBlocker("CodeRabbit commit_status is not enabled")
     base_branches = auto_review.get("base_branches")
     if not isinstance(base_branches, list):
         raise ProductionBug("CodeRabbit reviews.auto_review.base_branches must be a list")
@@ -111,6 +113,7 @@ def inspect_source_contracts(
             "autofix": False,
             "review_status": True,
             "review_progress": True,
+            "commit_status": True,
             "base_branches": base_branches,
         },
     }

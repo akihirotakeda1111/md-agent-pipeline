@@ -551,6 +551,15 @@ def main() -> int:
             else:
                 tracking_id = None
             repair_count = len(report["scenario_a"].get("repairs", []))
+            heads: list[tuple[str, str]] = [("deliver", initial_head)]
+            seen_heads = {initial_head}
+            for repair in report["scenario_a"].get("repairs") or []:
+                after = str(repair.get("after") or "")
+                if after and after not in seen_heads:
+                    heads.append(("repair", after))
+                    seen_heads.add(after)
+            if current_head not in seen_heads:
+                heads.append(("current", current_head))
             report["scenario_a"].update(
                 {
                     "final_state": scenario_a_state,
@@ -562,6 +571,15 @@ def main() -> int:
                     "tracking_comment_id": tracking_id,
                     "automatic_merge": pr.auto_merge,
                     "merged": pr.merged,
+                    "terminal_transports": github.observe_terminal_transports(
+                        workflow_id=review_workflow.id,
+                        baseline_ids=review_baseline,
+                        heads=heads,
+                        actor=configured_actor,
+                        check_app_slug=configured_check_app_slug,
+                        status_context=configured_status_context,
+                        timeout_seconds=args.discovery_timeout_seconds,
+                    ),
                 }
             )
 

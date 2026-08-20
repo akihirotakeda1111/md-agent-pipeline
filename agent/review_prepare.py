@@ -232,6 +232,13 @@ def prepare_review(
             "pull request head sha is missing",
             code="GITHUB_API_FAILURE",
         )
+    event_sha = event_commit_sha(event_payload)
+    if not _same_commit_sha(event_sha, head_sha):
+        return skip(
+            pull_number=number,
+            head_sha=head_sha,
+            reason="event sha is not the current pull head",
+        )
     marker = parse_work_unit_marker(str(pull.get("body") or ""))
     if marker is None:
         return skip(
@@ -262,6 +269,12 @@ def prepare_review(
         reason="ok",
         coderabbit_actor=actor,
     )
+
+
+def _same_commit_sha(left: str, right: str) -> bool:
+    first = left.strip().lower()
+    second = right.strip().lower()
+    return bool(first) and first == second
 
 
 def _unique_pull_numbers(value: Any) -> list[int]:

@@ -123,6 +123,7 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
     assert "merge" not in run.lower()
     prepare = payload["jobs"]["prepare"]
     assert prepare["outputs"]["coderabbit_actor"] == "${{ steps.gate.outputs.coderabbit_actor }}"
+    assert prepare["outputs"]["reason"] == "${{ steps.gate.outputs.reason }}"
 
 
 def test_prepare_job_loads_trusted_default_branch() -> None:
@@ -156,6 +157,7 @@ def test_coderabbit_yaml_keeps_incremental_review() -> None:
     assert "e2e/phase7-.*" in branches
     assert reviews["review_progress"] is True
     assert reviews["review_status"] is True
+    assert reviews["commit_status"] is True
     touches = reviews["finishing_touches"]
     assert touches["autofix"]["enabled"] is False
     assert touches["docstrings"]["enabled"] is False

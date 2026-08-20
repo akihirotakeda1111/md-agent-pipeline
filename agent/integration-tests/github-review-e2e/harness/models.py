@@ -109,6 +109,7 @@ def report_skeleton(scenario: Scenario) -> dict[str, Any]:
             "feedback": [],
             "review_runs": [],
             "head_history": [],
+            "terminal_transports": {},
         },
         "scenario_b": {"name": "non-coderabbit-actor-fail-closed"},
         "pr_count": None,

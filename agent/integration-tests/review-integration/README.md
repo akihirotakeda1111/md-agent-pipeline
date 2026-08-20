@@ -70,8 +70,9 @@ workflow YAML は構造解析のみです。`agent-review.yml` は execute workf
 
 | IDs | Area | 主な確認 |
 |---|---|---|
-| R01〜R04F | intake / prefilter | wake-up 再取得、actor、PR number / work-unit / HEAD、obsolete head、forbidden path |
+| R01〜R04F | intake / prefilter | wake-up 再取得、actor、PR number / work-unit / HEAD、stale event SHA、obsolete head、forbidden path |
 | R03N | identity | event PR number ≠ API PR number。classifier / Codex / commit / push なし。READY にしない |
+| R03H | identity | event SHA ≠ current `pull.head.sha`。classifier / Codex なし |
 | R05〜R11 | classifier / policy | schema、confidence、5 enum、allowed / referenced paths |
 | R12〜R16 | repair | Codex、Scope、全 Task Validation、FV、commit/push、attempt limit |
 | R17〜R21 | identity / convergence | duplicate、edited revision、pending current-HEAD、READY |

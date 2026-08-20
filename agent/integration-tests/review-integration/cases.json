@@ -3,6 +3,7 @@
   {"id":"R02","area":"prefilter","title":"non-CodeRabbit actor is rejected before classifier","test":"test_intake_prefilter.py::test_non_coderabbit_actor_is_rejected_before_classifier"},
   {"id":"R03","area":"identity","title":"PR work-unit or HEAD mismatch fails closed","test":"test_intake_prefilter.py::test_pr_work_unit_or_head_mismatch_fails_closed"},
   {"id":"R03N","area":"identity","title":"event PR number mismatch does not classify repair or become ready","test":"test_intake_prefilter.py::test_event_pr_number_mismatch_does_not_classify_repair_or_become_ready"},
+  {"id":"R03H","area":"identity","title":"stale terminal event SHA is skipped before classifier","test":"test_intake_prefilter.py::test_stale_terminal_event_sha_is_skipped_before_classifier"},
   {"id":"R04","area":"prefilter","title":"outdated feedback is skipped before classifier","test":"test_intake_prefilter.py::test_outdated_feedback_is_skipped_before_classifier"},
   {"id":"R04F","area":"prefilter","title":"obvious forbidden path is rejected before classifier","test":"test_intake_prefilter.py::test_obvious_forbidden_path_is_rejected_before_classifier"},
   {"id":"R05","area":"policy","title":"ACTIONABLE high confidence allowed path repairs","test":"test_classifier_policy.py::test_actionable_high_confidence_allowed_path_runs_repair"},

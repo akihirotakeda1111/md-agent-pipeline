@@ -65,14 +65,14 @@ Task Specはsingle Python fileだけを許可します。Task ValidationとFinal
 ```text
 Production execute
 -> Real PR
--> agent-review.yml (comment and/or check_run/status)
+-> agent-review.yml (`check_run` completed and/or `status`; comments are not subscribed)
 -> Production observable terminal on current HEAD
      READY_FOR_HUMAN + agent:ready + workflow completed + PR unmerged
      or ESCALATED + agent:escalated（CodeRabbit SKIPPED 等の仕様どおりの到達含む）
 -> [ACTIONABLE repair] Real Codex repair -> linear push -> wait again on new HEAD
 ```
 
-E2E の終了条件は Production の observable state です。Harness は `coderabbit_terminal() == COMPLETED` を必須にしません。CodeRabbit の Checks / commit status は外部サービスが動いた診断情報として report に残し、READY 判定には使いません。
+E2E の終了条件は Production の observable state です。Harness は `coderabbit_terminal() == COMPLETED` を必須にしません。CodeRabbit の Checks / commit status は外部サービスが動いた診断情報として report の `terminal_transports` に残し、READY 判定には使いません。Deliver 直後 HEAD と repair 後 HEAD について、`check_run` / `status` の API 有無、workflow 起動数、prepare 結果、COMPLETED / SKIPPED の観測有無を記録します。
 
 Polling は次の順です。
 
@@ -259,6 +259,7 @@ python agent/integration-tests/github-review-e2e/run.py `
 - PR URL/number/source/base/head SHA history
 - CodeRabbit feedback kind/id/actor/path/head association（本文は保存しない）
 - repair前後SHA、linear comparison、incremental review evidence
+- Deliver/repair HEAD ごとの `check_run` / `status` transport 記録と workflow 起動数
 - terminal labels/state、tracking comment ID、PR count、merge/auto-merge状態
 - Scenario B human comment does not start Agent Review; HEAD/state preservation
 - cleanup結果

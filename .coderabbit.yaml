@@ -26,6 +26,10 @@ reviews:
       - "e2e/phase7-.*"
   review_status: true
   review_progress: true
+  # Explicit for dual-transport observation. review_progress publishes Checks;
+  # commit_status requests the legacy commit-status mirror so Real E2E can
+  # record whether GitHub `status` events actually arrive.
+  commit_status: true
   finishing_touches:
     autofix:
       enabled: false

@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .assertions import terminal_state
-from .coderabbit_terminal import resolve_coderabbit_terminal
+from .coderabbit_terminal import (
+    KIND_COMPLETED,
+    KIND_SKIPPED,
+    resolve_coderabbit_terminal,
+    status_context_matches,
+)
 from .models import (
     EnvironmentBlocker,
     ExternalServiceBlocker,
@@ -24,6 +29,45 @@ ACTIVE_RUN_STATUSES = frozenset(
     {"queued", "in_progress", "waiting", "pending", "requested", "waiting_for_review"}
 )
 TERMINAL_WAKE_EVENTS = frozenset({"check_run", "status"})
+
+
+def _check_app_slug(item: dict[str, Any]) -> str:
+    app = item.get("app")
+    if not isinstance(app, dict):
+        return ""
+    return str(app.get("slug") or "").strip()
+
+
+def _compact_check_run(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "status": item.get("status"),
+        "conclusion": item.get("conclusion"),
+        "app_slug": _check_app_slug(item),
+        "head_sha": item.get("head_sha"),
+        "completed_at": item.get("completed_at"),
+    }
+
+
+def _compact_commit_status(item: dict[str, Any]) -> dict[str, Any]:
+    creator = item.get("creator")
+    login = creator.get("login") if isinstance(creator, dict) else None
+    return {
+        "context": item.get("context"),
+        "state": item.get("state"),
+        "sha": item.get("sha"),
+        "creator": login,
+        "updated_at": item.get("updated_at") or item.get("created_at"),
+    }
+
+
+def _status_matches(item: dict[str, Any], *, actor: str, status_context: str) -> bool:
+    context = item.get("context")
+    creator = item.get("creator")
+    login = creator.get("login") if isinstance(creator, dict) else None
+    context_ok = isinstance(context, str) and status_context_matches(context, status_context)
+    actor_ok = isinstance(login, str) and login.strip() == actor.strip()
+    return context_ok or actor_ok
 
 
 class GitHub:
@@ -426,6 +470,147 @@ class GitHub:
             check_app_slug=check_app_slug,
             status_context=status_context,
         )
+
+    def wait_new_workflow_runs_settled(
+        self,
+        workflow_id: int,
+        baseline_ids: set[int],
+        *,
+        timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + timeout_seconds
+        latest: list[dict[str, Any]] = []
+        while time.monotonic() < deadline:
+            latest = [
+                item
+                for item in self.list_workflow_runs(workflow_id)
+                if int(item["id"]) not in baseline_ids
+            ]
+            if latest and all(str(item.get("status") or "") == "completed" for item in latest):
+                return latest
+            time.sleep(self.poll_seconds)
+        return latest
+
+    def attempt_prepare_gate(self, run_id: int, attempt: int) -> dict[str, Any] | None:
+        completed = run(
+            [
+                "gh",
+                "run",
+                "view",
+                str(run_id),
+                "--repo",
+                self.repo,
+                "--attempt",
+                str(attempt),
+                "--log",
+            ],
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        found: dict[str, Any] | None = None
+        for line in completed.stdout.splitlines():
+            brace = line.find("{")
+            if brace < 0:
+                continue
+            try:
+                payload = json.loads(line[brace:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or "should_review" not in payload:
+                continue
+            found = {
+                "should_review": payload.get("should_review"),
+                "reason": payload.get("reason"),
+                "head_sha": payload.get("head_sha"),
+                "pull_number": payload.get("pull_number"),
+            }
+        return found
+
+    def observe_terminal_transports(
+        self,
+        *,
+        workflow_id: int,
+        baseline_ids: set[int],
+        heads: list[tuple[str, str]],
+        actor: str,
+        check_app_slug: str,
+        status_context: str,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        raw_runs = self.wait_new_workflow_runs_settled(
+            workflow_id, baseline_ids, timeout_seconds=timeout_seconds
+        )
+        workflow_runs: list[dict[str, Any]] = []
+        for item in raw_runs:
+            run_id = int(item["id"])
+            attempt = int(item.get("run_attempt") or 1)
+            event_name = str(item.get("event") or "")
+            status = str(item.get("status") or "")
+            jobs: dict[str, str] = {}
+            events: list[str] = []
+            gate: dict[str, Any] | None = None
+            if status == "completed":
+                evidence = self.run_evidence(item)
+                jobs = dict(evidence.jobs)
+                events = list(evidence.events)
+                gate = self.attempt_prepare_gate(run_id, attempt)
+            workflow_runs.append(
+                {
+                    "id": run_id,
+                    "event": event_name,
+                    "status": status,
+                    "conclusion": item.get("conclusion"),
+                    "html_url": item.get("html_url"),
+                    "jobs": jobs,
+                    "prepare": gate,
+                    "events": events,
+                }
+            )
+        head_rows: list[dict[str, Any]] = []
+        kinds: list[str] = []
+        for role, sha in heads:
+            checks = [
+                _compact_check_run(item)
+                for item in self.list_check_runs(sha)
+                if _check_app_slug(item) == check_app_slug
+            ]
+            statuses = [
+                _compact_commit_status(item)
+                for item in self.list_commit_statuses(sha)
+                if _status_matches(item, actor=actor, status_context=status_context)
+            ]
+            terminal = self.coderabbit_terminal(
+                sha,
+                actor=actor,
+                check_app_slug=check_app_slug,
+                status_context=status_context,
+            )
+            kinds.append(str(terminal.get("kind") or ""))
+            head_rows.append(
+                {
+                    "role": role,
+                    "head_sha": sha,
+                    "check_run_present": bool(checks),
+                    "status_present": bool(statuses),
+                    "check_runs": checks,
+                    "statuses": statuses,
+                    "terminal": terminal,
+                }
+            )
+        return {
+            "workflow_start_count": len(workflow_runs),
+            "check_run_workflow_starts": sum(
+                1 for item in workflow_runs if item["event"] == "check_run"
+            ),
+            "status_workflow_starts": sum(
+                1 for item in workflow_runs if item["event"] == "status"
+            ),
+            "workflow_runs": workflow_runs,
+            "heads": head_rows,
+            "completed_observed": KIND_COMPLETED in kinds,
+            "skipped_observed": KIND_SKIPPED in kinds,
+        }
 
     def correlated_review_runs(
         self,

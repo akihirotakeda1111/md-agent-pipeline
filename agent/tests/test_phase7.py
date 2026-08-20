@@ -566,6 +566,42 @@ def test_prepare_skips_pull_number_mismatch(tmp_path: Path) -> None:
     assert "identity" in result.reason
 
 
+def test_prepare_skips_stale_event_sha(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    payload = _check_run_event(repo)
+    payload["check_run"]["head_sha"] = "0" * 40
+    result = prepare_review(
+        repo_root=repo,
+        event_payload=payload,
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "current pull head" in result.reason
+
+
+def test_prepare_skips_stale_status_sha(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.commit_pulls = [fake.pull]
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "sender": {"login": ACTOR},
+            "sha": "0" * 40,
+            "context": "CodeRabbit",
+            "state": "success",
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "current pull head" in result.reason
+
+
 def test_prepare_resolves_spec_from_api_head_not_checkout_tree(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     spec = _spec(repo)

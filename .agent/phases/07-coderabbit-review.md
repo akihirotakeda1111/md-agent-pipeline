@@ -72,7 +72,7 @@ ACTIONABLE?
 
 Phase 7 Agent Review の本処理は、CodeRabbit レビューが terminal になったときだけ起動する。
 
-正式な wake-up:
+公式な wake-up（当面 dual。Real E2E で1本化する）:
 
 ```text
 check_run  (types: completed)
@@ -90,12 +90,15 @@ pull_request_review
 `@coderabbitai full review` は CodeRabbit への指示であり、Agent Review の wake-up ではない。
 full review 受付応答、summary / walkthrough、途中レビューコメントでも起動しない。
 
-terminal 判定はコメント本文（例: `Full review finished.`）を解析しない。
-Check Run の `status=completed` と commit status の非 pending `state` を使う。
+`check_run` / `status` は起動通知だけに使う。prepare は event SHA と API の
+`pull.head.sha` が一致しない古い terminal event を skip する。
 
-Event payload は wake-up signal のみ。起動後に GitHub API から current HEAD の
-review / comment と CodeRabbit terminal evidence を再取得し、その後に
-Classifier → Policy → Codex / READY / ESCALATED を実行する。
+起動後の Production 判定は wake-up payload ではなく、current HEAD の
+Checks / commit statuses / review / comment を GitHub API から再取得した結果による。
+コメント本文（例: `Full review finished.`）は解析しない。
+
+観測条件を固定するため `.coderabbit.yaml` は `reviews.review_progress: true` と
+`reviews.commit_status: true` を両方明示する。
 
 ---
 

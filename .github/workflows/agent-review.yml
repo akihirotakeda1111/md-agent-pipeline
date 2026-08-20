@@ -1,16 +1,18 @@
 # Asynchronous CodeRabbit review. Does not wait inside agent-execute.yml.
 #
 # Wake-up is CodeRabbit terminal evidence only: check_run completed or commit
-# status. Comment events are not subscribed. Intermediate CodeRabbit replies
-# (full-review acknowledgement, summary, walkthrough, inline comments) do not
-# start this workflow. Human comments such as `@coderabbitai full review` are
-# instructions to CodeRabbit, not to this agent.
+# status. Both are kept until Real E2E records which transport is stable on
+# GITHUB_TOKEN SHAs. Comment events are not subscribed. Intermediate CodeRabbit
+# replies (full-review acknowledgement, summary, walkthrough, inline comments)
+# do not start this workflow. Human comments such as `@coderabbitai full review`
+# are instructions to CodeRabbit, not to this agent.
 #
-# Event payloads are wake-up signals only. The review job re-fetches the
-# Pull Request, reviews, and comments through the GitHub API, then checks
-# out pull.head.sha from that API response. Orchestrator code is loaded
+# Event payloads are wake-up signals only. prepare skips when the event SHA is
+# not the current pull.head.sha. The review job re-fetches the Pull Request,
+# Checks, commit statuses, reviews, and comments through the GitHub API, then
+# checks out pull.head.sha from that API response. Orchestrator code is loaded
 # from the repository default branch; the PR head is only the repair workspace.
-# Terminal identity is the Check / commit status, not comment body text.
+# Production terminal identity comes from that API re-fetch, not the wake-up.
 #
 # Security:
 # - pull_request_target is forbidden.
@@ -89,6 +91,7 @@ jobs:
       head_sha: ${{ steps.gate.outputs.head_sha }}
       spec_id: ${{ steps.gate.outputs.spec_id }}
       spec_path: ${{ steps.gate.outputs.spec_path }}
+      reason: ${{ steps.gate.outputs.reason }}
       coderabbit_actor: ${{ steps.gate.outputs.coderabbit_actor }}
     steps:
       - name: Checkout trusted orchestrator
