@@ -27,6 +27,7 @@ class ReviewPrepareResult:
     spec_id: str
     spec_path: str
     reason: str
+    coderabbit_actor: str
 
     def to_output_map(self) -> dict[str, str]:
         return {
@@ -36,6 +37,7 @@ class ReviewPrepareResult:
             "spec_id": self.spec_id,
             "spec_path": self.spec_path,
             "reason": self.reason,
+            "coderabbit_actor": self.coderabbit_actor,
         }
 
     def to_json_dict(self) -> dict[str, object]:
@@ -47,6 +49,7 @@ class ReviewPrepareResult:
             "spec_id": self.spec_id,
             "spec_path": self.spec_path,
             "reason": self.reason,
+            "coderabbit_actor": self.coderabbit_actor,
         }
 
 
@@ -186,9 +189,14 @@ def prepare_review(
 ) -> ReviewPrepareResult:
     cfg = config or load_config()
     client = github or github_client_from_env()
+    actor = cfg.coderabbit.actor
+
+    def skip(**kwargs: Any) -> ReviewPrepareResult:
+        return _skip(coderabbit_actor=actor, **kwargs)
+
     if not has_coderabbit_event_identity(event_payload, cfg.coderabbit):
         number = pull_number_from_event(event_payload)
-        return _skip(
+        return skip(
             pull_number=number or 0,
             reason="event actor is not the configured CodeRabbit actor",
         )
@@ -196,21 +204,21 @@ def prepare_review(
     if number is None:
         number = _resolve_pull_number_from_sha(client, event_payload)
     if number is None:
-        return _skip(reason="event is not attached to a pull request")
+        return skip(reason="event is not attached to a pull request")
     pull = client.get_pull(number)
     api_number = pull.get("number")
     if not isinstance(api_number, int) or isinstance(api_number, bool) or api_number != number:
-        return _skip(
+        return skip(
             pull_number=number,
             reason="pull request identity does not match the wake-up event",
         )
     if str(pull.get("state") or "") != "open":
-        return _skip(pull_number=number, reason="pull request is not open")
+        return skip(pull_number=number, reason="pull request is not open")
     head_repo = head_repo_full_name(pull)
     if head_repo is None:
-        return _skip(pull_number=number, reason="pull request head repository is missing")
+        return skip(pull_number=number, reason="pull request head repository is missing")
     if head_repo != repository:
-        return _skip(pull_number=number, reason="fork pull requests are not reviewed")
+        return skip(pull_number=number, reason="fork pull requests are not reviewed")
     head_sha = head_sha_from_pull(pull)
     if not head_sha:
         raise AgentError.environment_failure(
@@ -219,7 +227,7 @@ def prepare_review(
         )
     marker = parse_work_unit_marker(str(pull.get("body") or ""))
     if marker is None:
-        return _skip(
+        return skip(
             pull_number=number,
             head_sha=head_sha,
             reason="pull request is not an orchestrator work unit",
@@ -231,7 +239,7 @@ def prepare_review(
         spec_directory=cfg.task_spec.directory,
     )
     if not is_same_work_unit_pull(spec, pull):
-        return _skip(
+        return skip(
             pull_number=number,
             head_sha=head_sha,
             spec_id=spec.id,
@@ -245,6 +253,7 @@ def prepare_review(
         spec_id=spec.id,
         spec_path=spec_path,
         reason="ok",
+        coderabbit_actor=actor,
     )
 
 
@@ -286,6 +295,7 @@ def _skip(
     spec_id: str = "",
     spec_path: str = "",
     reason: str,
+    coderabbit_actor: str,
 ) -> ReviewPrepareResult:
     return ReviewPrepareResult(
         should_review=False,
@@ -294,4 +304,5 @@ def _skip(
         spec_id=spec_id,
         spec_path=spec_path,
         reason=reason,
+        coderabbit_actor=coderabbit_actor,
     )

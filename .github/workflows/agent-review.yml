@@ -24,7 +24,14 @@
 #   cancel-in-progress: false queues the next review. A cancelled sibling
 #   does not prevent the remaining run from re-fetching current feedback.
 #
+# Codex:
+# - openai/codex-action is sandbox bootstrap only. It does not receive the
+#   review prompt. Repair still runs Review Orchestrator → Codex Runner →
+#   `codex exec`. allow-bot-users is the configured CodeRabbit actor from
+#   agent/config.json via prepare; allow-bots is never true.
+#
 # Official references:
+# - https://github.com/openai/codex-action
 # - https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows
 # - https://docs.github.com/en/webhooks/webhook-events-and-payloads#check_run
 # - https://docs.github.com/en/webhooks/webhook-events-and-payloads#status
@@ -69,6 +76,7 @@ jobs:
       head_sha: ${{ steps.gate.outputs.head_sha }}
       spec_id: ${{ steps.gate.outputs.spec_id }}
       spec_path: ${{ steps.gate.outputs.spec_path }}
+      coderabbit_actor: ${{ steps.gate.outputs.coderabbit_actor }}
     steps:
       - name: Checkout trusted orchestrator
         uses: actions/checkout@v7
@@ -152,6 +160,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           codex-version: ${{ steps.codex-cli.outputs.version }}
+          allow-bot-users: ${{ needs.prepare.outputs.coderabbit_actor }}
 
       - name: Run review orchestrator
         env:

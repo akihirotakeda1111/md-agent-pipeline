@@ -429,6 +429,8 @@ def test_prepare_skips_non_configured_actor(tmp_path: Path) -> None:
     )
     assert result.should_review is False
     assert "configured CodeRabbit actor" in result.reason
+    assert result.coderabbit_actor == load_config().coderabbit.actor
+    assert result.to_output_map()["coderabbit_actor"] == load_config().coderabbit.actor
 
 
 def test_prepare_skips_fork_pull_request(tmp_path: Path) -> None:
@@ -477,6 +479,7 @@ def test_prepare_resolves_spec_from_api_head_not_checkout_tree(tmp_path: Path) -
     )
     assert result.should_review is True
     assert result.spec_path == "specs/tasks/review-demo.md"
+    assert result.coderabbit_actor == ACTOR
     assert result.spec_id == spec.id
     assert result.head_sha == head_sha(repo)
 

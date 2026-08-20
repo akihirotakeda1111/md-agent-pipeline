@@ -38,6 +38,7 @@
   {"id":"W04","area":"security","title":"checkout does not persist credentials","test":"test_workflow_contract.py::test_checkout_does_not_persist_credentials"},
   {"id":"W05","area":"security","title":"classifier and Codex credentials are separated","test":"test_workflow_contract.py::test_classifier_and_codex_credentials_are_separated"},
   {"id":"W06","area":"security","title":"Codex has no GitHub write authority","test":"test_write_isolation.py::test_codex_has_no_github_or_classifier_authority"},
+  {"id":"W07","area":"security","title":"codex-action allows only the configured CodeRabbit bot","test":"test_workflow_contract.py::test_codex_action_allows_only_configured_coderabbit_bot"},
   {"id":"H01","area":"harness","title":"real temporary Git repository and bare remote","test":"test_harness_contract.py::test_real_git_repository_and_bare_remote"},
   {"id":"H02","area":"harness","title":"fakes only record scripted IO","test":"test_harness_contract.py::test_fakes_only_record_scripted_io"},
   {"id":"H03","area":"harness","title":"observations are valid JSON lines","test":"test_harness_contract.py::test_observations_are_valid_json_lines"}

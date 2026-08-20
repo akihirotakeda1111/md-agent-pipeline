@@ -109,3 +109,27 @@ def test_classifier_and_codex_credentials_are_separated(production_root):
             continue
         assert not contains_reference(step.get("env", {}), "CODEX_API_KEY")
         assert not contains_reference(step.get("env", {}), "REVIEW_CLASSIFIER_API_KEY")
+
+
+def test_codex_action_allows_only_configured_coderabbit_bot(production_root):
+    workflow = review_workflow(production_root)
+    review = workflow["jobs"]["review"]
+    assert review["if"] == "${{ needs.prepare.outputs.should_review == 'true' }}"
+    prepare = workflow["jobs"]["prepare"]
+    assert "coderabbit_actor" in prepare["outputs"]
+    assert "steps.gate.outputs.coderabbit_actor" in str(prepare["outputs"]["coderabbit_actor"])
+    bootstrap = next(
+        step
+        for step in review["steps"]
+        if str(step.get("uses", "")).startswith("openai/codex-action@")
+    )
+    inputs = bootstrap.get("with") or {}
+    assert inputs.get("allow-bots") in (None, False, "false")
+    allow_bots_users = str(inputs.get("allow-bot-users") or "")
+    assert allow_bots_users == "${{ needs.prepare.outputs.coderabbit_actor }}"
+    assert "*" not in allow_bots_users
+    assert "coderabbitai[bot]" not in allow_bots_users
+    assert inputs.get("prompt") in (None, "")
+    assert inputs.get("prompt-file") in (None, "")
+    assert "GITHUB_TOKEN" not in str(inputs)
+    assert "REVIEW_CLASSIFIER_API_KEY" not in str(bootstrap)

@@ -204,7 +204,7 @@ Phase 7 の実 GitHub 実行には追加の人間側設定が必要です。
 - **CodeRabbit incremental review**: `auto_incremental_review: true`。repair push の再レビューが止まると Phase 7 ループは収束しない。Organization / UI 側で上書きしないこと
 - **CodeRabbit auto-pause**: `auto_pause_after_reviewed_commits` は 0（無制限）にしない。`1 + review_attempt_limit` 以上を維持する（現行は 5、limit は 3）
 - **CodeRabbit base branches**: `.coderabbit.yaml` は repository default（`^main$`）と Phase 7 E2E isolated base（`e2e/phase7-.*`）を明示する。空配列は default のみになり、`github-review-e2e` は `ENVIRONMENT_BLOCKER` で止まる。非空 list は CodeRabbit の implicit default を置き換えるので `main` を残す
-- **CodeRabbit actor**: テスト PR の GitHub event で実際の `sender.login` / `actor.login` を確認し、その値だけを `agent/config.json` の `coderabbit.actor` に入れる。bot 名を推測で確定しない。識別ロジックへ bot 名を hard-code しない
+- **CodeRabbit actor**: テスト PR の GitHub event で実際の `sender.login` / `actor.login` を確認し、その値だけを `agent/config.json` の `coderabbit.actor` に入れる。bot 名を推測で確定しない。識別ロジックへ bot 名を hard-code しない。`agent-review.yml` の `openai/codex-action` は `allow-bots: true` を使わず、prepare がこの actor を `allow-bot-users` へ渡す（sandbox bootstrap のみ。review prompt は渡さない）
 - **CodeRabbit terminal identity**: `coderabbit.check_app_slug` と `coderabbit.status_context` も実 check / commit status から確認して入れる。Checks と commit statuses の両方を再取得し、live COMPLETED/SKIPPED payload で transport をロックするまではどちらも購読する
 - **CodeRabbit review status**: `.coderabbit.yaml` の `reviews.review_status` と `reviews.review_progress` を有効にする。terminal evidence の wake-up に使う
 - **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。修正は Classifier → Policy → Codex だけ

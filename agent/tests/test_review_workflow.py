@@ -109,8 +109,17 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
         for step in review["steps"]
         if str(step.get("uses", "")).startswith("openai/codex-action@")
     )
-    assert bootstrap["with"]["openai-api-key"] == "unused-bootstrap-placeholder"
+    inputs = bootstrap["with"]
+    assert inputs["openai-api-key"] == "unused-bootstrap-placeholder"
+    assert "secrets." not in str(inputs["openai-api-key"])
+    assert inputs.get("prompt") in (None, "")
+    assert inputs.get("prompt-file") in (None, "")
+    assert inputs["allow-bot-users"] == "${{ needs.prepare.outputs.coderabbit_actor }}"
+    assert "coderabbitai[bot]" not in str(inputs["allow-bot-users"])
+    assert inputs.get("allow-bots") in (None, False, "false")
     assert "merge" not in run.lower()
+    prepare = payload["jobs"]["prepare"]
+    assert prepare["outputs"]["coderabbit_actor"] == "${{ steps.gate.outputs.coderabbit_actor }}"
 
 
 def test_prepare_job_loads_trusted_default_branch() -> None:
