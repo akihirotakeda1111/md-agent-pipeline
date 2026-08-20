@@ -53,10 +53,12 @@ from harness.github import (
     classify_terminal_wake_candidate,
     completed_review_run_for_terminal,
     new_terminal_wake_runs,
+    parse_prepare_gate_from_log,
     prepare_binds_to_target_pr,
     raise_if_prepare_fault,
 )
 from harness.models import (
+    E2EBug,
     EnvironmentBlocker,
     ExternalServiceBlocker,
     ProductionBug,
@@ -707,7 +709,7 @@ class HarnessTests(unittest.TestCase):
                 }
             )
         self.assertEqual(missing_logs.exception.category, "ENVIRONMENT_BLOCKER")
-        with self.assertRaises(ProductionBug):
+        with self.assertRaises(E2EBug) as parse_failed:
             raise_if_prepare_fault(
                 {
                     "kind": CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
@@ -716,7 +718,39 @@ class HarnessTests(unittest.TestCase):
                     "jobs": {"Prepare review": "success"},
                 }
             )
+        self.assertEqual(parse_failed.exception.category, "E2E_BUG")
         raise_if_prepare_fault({"kind": CANDIDATE_PREPARE_SKIPPED, "id": 10})
+
+    def test_prepare_gate_parses_indented_multiline_json_from_workflow_logs(self) -> None:
+        head = "b" * 40
+        payload = {
+            "ok": True,
+            "should_review": True,
+            "pull_number": 19,
+            "head_sha": head,
+            "reason": "ok",
+            "spec_id": "wu-1",
+            "spec_path": "specs/tasks/example.md",
+            "coderabbit_actor": "coderabbitai[bot]",
+        }
+        pretty = json.dumps(payload, ensure_ascii=False, indent=2)
+        compact = json.dumps(payload, ensure_ascii=False)
+        pretty_log = "\n".join(
+            f"Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.{index:07d}Z\t{line}"
+            for index, line in enumerate(pretty.splitlines())
+        )
+        compact_log = (
+            "Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000000Z\t"
+            + compact
+        )
+        pretty_gate = parse_prepare_gate_from_log(pretty_log)
+        compact_gate = parse_prepare_gate_from_log(compact_log)
+        self.assertEqual(pretty_gate["should_review"], True)
+        self.assertEqual(pretty_gate["pull_number"], 19)
+        self.assertEqual(pretty_gate["head_sha"], head)
+        self.assertEqual(pretty_gate["reason"], "ok")
+        self.assertEqual(pretty_gate, compact_gate)
+        self.assertIsNone(parse_prepare_gate_from_log("Prepare review\tGate\tts\tnot json"))
 
     def test_repair_head_and_old_head_terminal_are_separated(self) -> None:
         old_head = "a" * 40

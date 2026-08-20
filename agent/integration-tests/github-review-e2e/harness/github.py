@@ -18,6 +18,7 @@ from .coderabbit_terminal import (
 )
 from .models import (
     ClassifiedFailure,
+    E2EBug,
     EnvironmentBlocker,
     ExternalServiceBlocker,
     FeedbackEvidence,
@@ -112,6 +113,53 @@ def parse_prepare_pull_number(value: Any) -> int | None:
 
 def should_review_enabled(value: Any) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def log_line_message(line: str) -> str:
+    stripped = line.rstrip("\r")
+    parts = stripped.split("\t", 3)
+    if len(parts) == 4:
+        return parts[3]
+    return stripped
+
+
+def iter_json_objects_from_log(text: str):
+    blob = "\n".join(log_line_message(line) for line in text.splitlines())
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(blob)
+    while index < length:
+        start = blob.find("{", index)
+        if start < 0:
+            return
+        try:
+            payload, end = decoder.raw_decode(blob, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        if isinstance(payload, dict):
+            yield payload
+        index = max(end, start + 1)
+
+
+def prepare_gate_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if "should_review" not in payload:
+        return None
+    return {
+        "should_review": payload.get("should_review"),
+        "reason": payload.get("reason"),
+        "head_sha": payload.get("head_sha"),
+        "pull_number": payload.get("pull_number"),
+    }
+
+
+def parse_prepare_gate_from_log(text: str) -> dict[str, Any] | None:
+    found: dict[str, Any] | None = None
+    for payload in iter_json_objects_from_log(text):
+        gate = prepare_gate_from_payload(payload)
+        if gate is not None:
+            found = gate
+    return found
 
 
 def prepare_binds_to_target_pr(
@@ -278,8 +326,8 @@ def raise_if_prepare_fault(snapshot: dict[str, Any]) -> None:
             "could not read Agent Review prepare output from workflow logs",
             evidence=evidence,
         )
-    raise ProductionBug(
-        "Agent Review prepare completed without usable JSON output",
+    raise E2EBug(
+        "Agent Review prepare logs were retrieved but E2E could not parse prepare JSON",
         evidence=evidence,
     )
 
@@ -616,15 +664,8 @@ class GitHub:
         if completed.returncode != 0:
             return "unavailable", []
         events: list[str] = []
-        for line in completed.stdout.splitlines():
-            brace = line.find("{")
-            if brace < 0:
-                continue
-            try:
-                payload = json.loads(line[brace:])
-            except json.JSONDecodeError:
-                continue
-            name = payload.get("event", payload.get("type")) if isinstance(payload, dict) else None
+        for payload in iter_json_objects_from_log(completed.stdout):
+            name = payload.get("event", payload.get("type"))
             if isinstance(name, str):
                 events.append(name)
         return ("observed" if events else "not_observable"), events
@@ -794,24 +835,7 @@ class GitHub:
         )
         if completed.returncode != 0:
             return None, True
-        found: dict[str, Any] | None = None
-        for line in completed.stdout.splitlines():
-            brace = line.find("{")
-            if brace < 0:
-                continue
-            try:
-                payload = json.loads(line[brace:])
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict) or "should_review" not in payload:
-                continue
-            found = {
-                "should_review": payload.get("should_review"),
-                "reason": payload.get("reason"),
-                "head_sha": payload.get("head_sha"),
-                "pull_number": payload.get("pull_number"),
-            }
-        return found, False
+        return parse_prepare_gate_from_log(completed.stdout), False
 
     def observe_terminal_transports(
         self,
