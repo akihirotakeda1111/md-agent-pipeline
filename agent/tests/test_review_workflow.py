@@ -35,11 +35,7 @@ def test_review_workflow_uses_async_github_events() -> None:
     assert triggers["status"] is None or triggers["status"] == {}
     assert "pull_request_target" not in triggers
     assert payload["permissions"] == {"contents": "read"}
-    group = payload["concurrency"]["group"]
-    assert "github.event.pull_request.number" in group
-    assert "github.event.check_run.head_sha" in group
-    assert "github.event.sha" in group
-    assert payload["concurrency"]["cancel-in-progress"] is False
+    assert "concurrency" not in payload
 
 
 def test_review_workflow_skips_forks_and_does_not_poll() -> None:
@@ -56,14 +52,18 @@ def test_review_workflow_skips_forks_and_does_not_poll() -> None:
     }
     assert "CODEX_API_KEY" not in yaml.safe_dump(prepare)
     assert "REVIEW_CLASSIFIER_API_KEY" not in yaml.safe_dump(prepare)
+    assert "concurrency" not in prepare
 
 
 def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
     payload, _ = _load(WORKFLOW)
     review = payload["jobs"]["review"]
     assert review["if"] == "${{ needs.prepare.outputs.should_review == 'true' }}"
-    assert review["concurrency"]["group"] == "agent-review-${{ needs.prepare.outputs.pull_number }}"
+    group = review["concurrency"]["group"]
+    assert "github.workflow" in group
+    assert "needs.prepare.outputs.pull_number" in group
     assert review["concurrency"]["cancel-in-progress"] is False
+    assert "queue" not in review["concurrency"]
     assert review["permissions"] == {
         "contents": "write",
         "pull-requests": "write",

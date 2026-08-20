@@ -92,13 +92,41 @@ class HarnessTests(unittest.TestCase):
                 "check_run": {"types": ["completed"]},
                 "status": None,
             },
-            "concurrency": {"group": "agent-review-pr", "cancel-in-progress": False},
-            "jobs": {},
+            "jobs": {
+                "prepare": {},
+                "review": {
+                    "concurrency": {
+                        "group": "${{ github.workflow }}-${{ needs.prepare.outputs.pull_number }}",
+                        "cancel-in-progress": False,
+                    }
+                },
+            },
         }
         self.assertEqual(
             assert_review_workflow_contract(workflow),
             ("issue_comment", "check_run", "status"),
         )
+
+    def test_review_workflow_contract_rejects_workflow_level_concurrency(self) -> None:
+        workflow = {
+            "on": {
+                "issue_comment": {"types": ["created"]},
+                "check_run": {"types": ["completed"]},
+                "status": None,
+            },
+            "concurrency": {"group": "agent-review-pr", "cancel-in-progress": False},
+            "jobs": {
+                "prepare": {},
+                "review": {
+                    "concurrency": {
+                        "group": "${{ github.workflow }}-${{ needs.prepare.outputs.pull_number }}",
+                        "cancel-in-progress": False,
+                    }
+                },
+            },
+        }
+        with self.assertRaises(ProductionBug):
+            assert_review_workflow_contract(workflow)
 
     def test_review_workflow_contract_requires_terminal_wakeups(self) -> None:
         workflow = {

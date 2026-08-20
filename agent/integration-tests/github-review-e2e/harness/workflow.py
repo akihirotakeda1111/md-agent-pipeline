@@ -156,7 +156,25 @@ def assert_review_workflow_contract(workflow: dict[str, Any]) -> tuple[str, ...]
         raise ProductionBug("agent-review.yml uses forbidden pull_request_target")
     if "sleep " in text or "while true" in text:
         raise ProductionBug("Production review workflow contains unbounded/fixed waiting logic")
-    concurrency = workflow.get("concurrency")
-    if not isinstance(concurrency, dict) or concurrency.get("cancel-in-progress") not in (False, "false"):
-        raise ProductionBug("agent-review.yml must serialize same-PR events without cancellation")
+    if workflow.get("concurrency") not in (None, {}):
+        raise ProductionBug("agent-review.yml must not use workflow-level concurrency")
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        raise ProductionBug("agent-review.yml has no jobs")
+    prepare = jobs.get("prepare")
+    if isinstance(prepare, dict) and prepare.get("concurrency") not in (None, {}):
+        raise ProductionBug("prepare job must not take a concurrency lock")
+    review = jobs.get("review")
+    if not isinstance(review, dict):
+        raise ProductionBug("agent-review.yml is missing the review job")
+    concurrency = review.get("concurrency")
+    if not isinstance(concurrency, dict):
+        raise ProductionBug("review job must serialize same-PR work with a concurrency group")
+    group = str(concurrency.get("group") or "")
+    if "needs.prepare.outputs.pull_number" not in group:
+        raise ProductionBug("review concurrency group must use prepare's API pull_number")
+    if "github.workflow" not in group:
+        raise ProductionBug("review concurrency group must prefix with github.workflow")
+    if concurrency.get("cancel-in-progress") not in (False, "false"):
+        raise ProductionBug("review job must serialize same-PR events without cancellation")
     return events

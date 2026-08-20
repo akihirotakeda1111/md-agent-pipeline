@@ -33,7 +33,7 @@
   {"id":"R23","area":"observability","title":"escalation is explicit","test":"test_observability.py::test_escalation_emits_review_escalated"},
   {"id":"R24","area":"observability","title":"ready is emitted only after convergence","test":"test_observability.py::test_ready_event_is_terminal_after_collection_and_policy"},
   {"id":"W01","area":"workflow","title":"review uses separate asynchronous workflow","test":"test_workflow_contract.py::test_review_is_a_separate_async_workflow"},
-  {"id":"W02","area":"workflow","title":"same PR concurrency is serialized","test":"test_workflow_contract.py::test_same_pr_concurrency_contract"},
+  {"id":"W02","area":"workflow","title":"review job serializes by PR without workflow-level concurrency","test":"test_workflow_contract.py::test_same_pr_concurrency_contract"},
   {"id":"W03","area":"security","title":"workflow permissions are explicit and minimal","test":"test_workflow_contract.py::test_permissions_are_explicit_and_minimal"},
   {"id":"W04","area":"security","title":"checkout does not persist credentials","test":"test_workflow_contract.py::test_checkout_does_not_persist_credentials"},
   {"id":"W05","area":"security","title":"classifier and Codex credentials are separated","test":"test_workflow_contract.py::test_classifier_and_codex_credentials_are_separated"},

@@ -62,7 +62,7 @@ GitHub event（wake-up のみ）
 
 Event payload だけをレビュー全体と見なしません。PR number は wake-up event と API 再取得結果を照合し、矛盾時は fail-closed です。classifier 結果は必ず Policy を通ります。Codex は実装エンジンであり、GitHub / classifier credential を受け取りません。
 
-workflow YAML は構造解析のみです。`agent-review.yml` は execute workflow と分離し、`pull_request_target` を使わず、checkout は `persist-credentials: false` です。Secret は workflow / job 全体へ置かず、Orchestrator step（`run-review.py`）だけが `CODEX_API_KEY` と `REVIEW_CLASSIFIER_API_KEY` を受け取ります。subprocess 隔離は W06 が確認します。
+workflow YAML は構造解析のみです。`agent-review.yml` は execute workflow と分離し、`pull_request_target` を使わず、checkout は `persist-credentials: false` です。workflow-level concurrency は置かず、review job だけが `needs.prepare.outputs.pull_number` で同一 PR を直列化します（`cancel-in-progress: false`）。prepare は並列のままです。Secret は workflow / job 全体へ置かず、Orchestrator step（`run-review.py`）だけが `CODEX_API_KEY` と `REVIEW_CLASSIFIER_API_KEY` を受け取ります。subprocess 隔離は W06 が確認します。
 
 ## Cases
 

@@ -43,27 +43,19 @@ def test_review_is_a_separate_async_workflow(production_root):
 
 def test_same_pr_concurrency_contract(production_root):
     workflow = review_workflow(production_root)
-    concurrency = workflow.get("concurrency")
-    assert isinstance(concurrency, dict), "review workflow must define PR-scoped concurrency"
+    assert workflow.get("concurrency") in (None, {}), (
+        "workflow-level concurrency deadlocks the review job on the same group"
+    )
+    prepare = workflow["jobs"]["prepare"]
+    assert prepare.get("concurrency") in (None, {}), (
+        "prepare must not take a concurrency lock"
+    )
+    review = workflow["jobs"]["review"]
+    concurrency = review.get("concurrency")
+    assert isinstance(concurrency, dict), "review job must define PR-scoped concurrency"
     group = str(concurrency.get("group", ""))
-    assert "pr" in group.lower() or "pull" in group.lower()
-    assert any(
-        token in group
-        for token in (
-            "github.event.pull_request.number",
-            "github.event.issue.number",
-            "needs.",
-            "inputs.pr_number",
-        )
-    )
-    assert any(
-        token in group
-        for token in (
-            "github.event.check_run.head_sha",
-            "github.event.sha",
-            "github.event.check_run.pull_requests",
-        )
-    )
+    assert "github.workflow" in group
+    assert "needs.prepare.outputs.pull_number" in group
     assert is_false(concurrency.get("cancel-in-progress")), "same-PR review runs must serialize"
 
 
