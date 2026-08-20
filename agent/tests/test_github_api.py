@@ -36,10 +36,11 @@ def test_http_error_is_classified_not_network(status: int, message: str, code: s
         raise _http_error(url, status, message)
 
     with pytest.raises(AgentError) as caught:
-        _client(requester).request("GET", "/repos/octo/repo/labels/agent%3Aready")
+        _client(requester).request("GET", "/repos/octo/repo/commits/abc/check-runs")
     assert caught.value.code == code
     assert caught.value.code != "GITHUB_API_NETWORK"
     assert message in str(caught.value)
+    assert "GET /repos/octo/repo/commits/abc/check-runs" in str(caught.value)
 
 
 @pytest.mark.parametrize(

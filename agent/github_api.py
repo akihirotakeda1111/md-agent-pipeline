@@ -100,7 +100,7 @@ class GitHubClient:
             # HTTPError subclasses URLError. Classify 401/403/404/422 as HTTP
             # errors; GITHUB_API_NETWORK is only for DNS/connect failures.
             detail = _read_http_error(exc)
-            raise _github_http_error(exc.code, detail) from exc
+            raise _github_http_error(exc.code, detail, endpoint=f"{method} {path}") from exc
         except URLError as exc:
             raise AgentError.environment_failure(
                 f"GitHub API network error: {exc.reason}",
@@ -112,7 +112,7 @@ class GitHubClient:
                 code="GITHUB_API_FAILURE",
             )
         if status >= 400:
-            raise _github_http_error(status, payload)
+            raise _github_http_error(status, payload, endpoint=f"{method} {path}")
         return GitHubResponse(status=status, payload=payload)
 
     def list_open_pulls(self, *, head_branch: str) -> list[dict[str, Any]]:
@@ -417,30 +417,31 @@ def _read_http_error(exc: HTTPError) -> Any:
         return raw.decode("utf-8", errors="replace")
 
 
-def _github_http_error(status: int, payload: Any) -> AgentError:
+def _github_http_error(status: int, payload: Any, *, endpoint: str = "") -> AgentError:
     message = _payload_message(payload)
+    where = f" ({endpoint})" if endpoint else ""
     if status in {401, 403}:
         return AgentError.environment_failure(
-            f"GitHub API authentication/permission error {status}: {message}",
+            f"GitHub API authentication/permission error {status}: {message}{where}",
             code="GITHUB_API_PERMISSION",
         )
     if status == 404:
         return AgentError.environment_failure(
-            f"GitHub API not found: {message}",
+            f"GitHub API not found: {message}{where}",
             code="GITHUB_NOT_FOUND",
         )
     if status == 422:
         return AgentError.environment_failure(
-            f"GitHub API validation failed: {message}",
+            f"GitHub API validation failed: {message}{where}",
             code="GITHUB_API_VALIDATION",
         )
     if status >= 500:
         return AgentError.environment_failure(
-            f"GitHub API {status}: {message}",
+            f"GitHub API {status}: {message}{where}",
             code="GITHUB_API_FAILURE",
         )
     return AgentError.environment_failure(
-        f"GitHub API {status}: {message}",
+        f"GitHub API {status}: {message}{where}",
         code="GITHUB_API_FAILURE",
     )
 

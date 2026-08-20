@@ -35,6 +35,7 @@
   {"id":"W01","area":"workflow","title":"review uses separate asynchronous workflow","test":"test_workflow_contract.py::test_review_is_a_separate_async_workflow"},
   {"id":"W02","area":"workflow","title":"review job serializes by PR without workflow-level concurrency","test":"test_workflow_contract.py::test_same_pr_concurrency_contract"},
   {"id":"W03","area":"security","title":"workflow permissions are explicit and minimal","test":"test_workflow_contract.py::test_permissions_are_explicit_and_minimal"},
+  {"id":"W03C","area":"security","title":"review job has checks read for CodeRabbit terminal","test":"test_workflow_contract.py::test_jobs_that_read_checks_have_checks_read"},
   {"id":"W04","area":"security","title":"checkout does not persist credentials","test":"test_workflow_contract.py::test_checkout_does_not_persist_credentials"},
   {"id":"W05","area":"security","title":"classifier and Codex credentials are separated","test":"test_workflow_contract.py::test_classifier_and_codex_credentials_are_separated"},
   {"id":"W06","area":"security","title":"Codex has no GitHub write authority","test":"test_write_isolation.py::test_codex_has_no_github_or_classifier_authority"},

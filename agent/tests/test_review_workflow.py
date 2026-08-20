@@ -48,8 +48,8 @@ def test_review_workflow_skips_forks_and_does_not_poll() -> None:
     assert prepare["permissions"] == {
         "contents": "read",
         "pull-requests": "read",
-        "checks": "read",
     }
+    assert "checks" not in prepare["permissions"]
     assert "CODEX_API_KEY" not in yaml.safe_dump(prepare)
     assert "REVIEW_CLASSIFIER_API_KEY" not in yaml.safe_dump(prepare)
     assert "concurrency" not in prepare
@@ -69,7 +69,12 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
         "pull-requests": "write",
         "issues": "write",
         "checks": "read",
+        "statuses": "read",
     }
+    assert review["permissions"].get("checks") == "read"
+    assert review["permissions"].get("statuses") == "read"
+    assert "write" not in str(review["permissions"].get("checks"))
+    assert "write" not in str(review["permissions"].get("statuses"))
     checkouts = [
         step
         for step in review["steps"]

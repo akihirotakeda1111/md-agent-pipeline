@@ -30,6 +30,18 @@
 #   `codex exec`. allow-bot-users is the configured CodeRabbit actor from
 #   agent/config.json via prepare; allow-bots is never true.
 #
+# Permissions (GITHUB_TOKEN, least privilege):
+# - workflow default: contents: read (checkout of the trusted default branch).
+# - prepare (read-only gate): contents: read (Contents API Task Spec at HEAD),
+#   pull-requests: read (get pull, list pulls for a commit SHA). Does not call
+#   Checks or Statuses APIs and does not write issues/comments/labels.
+# - review: contents: write (repair push), pull-requests: write (reviews and
+#   review comments), issues: write (issue comments and exclusive labels),
+#   checks: read (GET /commits/{sha}/check-runs), statuses: read
+#   (GET /commits/{sha}/statuses). contents write does not cover either.
+#   checks: write and statuses: write are forbidden.
+# - Codex subprocess never receives GITHUB_TOKEN.
+#
 # Official references:
 # - https://github.com/openai/codex-action
 # - https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows
@@ -37,6 +49,7 @@
 # - https://docs.github.com/en/webhooks/webhook-events-and-payloads#status
 # - https://docs.github.com/en/rest/checks/runs
 # - https://docs.github.com/en/rest/commits/statuses
+# - https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps
 # - https://docs.github.com/en/rest/pulls/reviews
 # - https://docs.github.com/en/rest/pulls/comments
 # - https://docs.github.com/en/rest/issues/comments
@@ -69,7 +82,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      checks: read
     outputs:
       should_review: ${{ steps.gate.outputs.should_review }}
       pull_number: ${{ steps.gate.outputs.pull_number }}
@@ -114,6 +126,7 @@ jobs:
       pull-requests: write
       issues: write
       checks: read
+      statuses: read
     steps:
       - name: Checkout trusted orchestrator
         uses: actions/checkout@v7

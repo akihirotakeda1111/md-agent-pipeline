@@ -62,10 +62,29 @@ def test_same_pr_concurrency_contract(production_root):
 def test_permissions_are_explicit_and_minimal(production_root):
     workflow = review_workflow(production_root)
     assert isinstance(workflow.get("permissions"), dict)
+    assert workflow["permissions"] == {"contents": "read"}
     for name in workflow["jobs"]:
         permissions = effective_permissions(workflow, name)
-        assert set(permissions) <= {"contents", "pull-requests", "issues", "checks"}
+        assert set(permissions) <= {
+            "contents",
+            "pull-requests",
+            "issues",
+            "checks",
+            "statuses",
+        }
         assert all(value in {"read", "write", "none"} for value in permissions.values())
+        assert permissions.get("checks") != "write"
+        assert permissions.get("statuses") != "write"
+    prepare = effective_permissions(workflow, "prepare")
+    assert prepare == {"contents": "read", "pull-requests": "read"}
+    review = effective_permissions(workflow, "review")
+    assert review == {
+        "contents": "write",
+        "pull-requests": "write",
+        "issues": "write",
+        "checks": "read",
+        "statuses": "read",
+    }
     combined = {
         key: value
         for name in workflow["jobs"]
@@ -73,6 +92,19 @@ def test_permissions_are_explicit_and_minimal(production_root):
     }
     assert combined.get("contents") == "write"
     assert combined.get("pull-requests") == "write"
+    assert combined.get("issues") == "write"
+    assert combined.get("checks") == "read"
+    assert combined.get("statuses") == "read"
+
+
+def test_jobs_that_read_checks_have_checks_read(production_root):
+    workflow = review_workflow(production_root)
+    review = effective_permissions(workflow, "review")
+    assert review.get("checks") == "read"
+    assert review.get("statuses") == "read"
+    prepare = effective_permissions(workflow, "prepare")
+    assert "checks" not in prepare
+    assert "statuses" not in prepare
 
 
 def test_checkout_does_not_persist_credentials(production_root):

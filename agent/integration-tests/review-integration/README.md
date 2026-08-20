@@ -77,7 +77,7 @@ workflow YAML は構造解析のみです。`agent-review.yml` は execute workf
 | R17〜R21 | identity / convergence | duplicate、edited revision、pending current-HEAD、READY |
 | R25〜R30 | terminal | COMPLETED+0/NON_ACTIONABLE → READY、COMPLETED+ACTIONABLE → repair、SKIPPED → ESCALATED、terminalなし+0 → IN_REVIEW、old HEAD無視 |
 | R22〜R24 | observability | 必須イベントの存在と有意な部分順序 |
-| W01〜W07 | workflow / security | 非同期 trigger、concurrency、permissions、checkout、credential 配置、Codex Action の bot allowlist、subprocess 隔離 |
+| W01〜W07 | workflow / security | 非同期 trigger、concurrency、最小権限（review の checks: read / statuses: read）、checkout、credential 配置、Codex Action の bot allowlist、subprocess 隔離 |
 | H01〜H03 | harness | 実 Git、dumb Fake、JSONL observations |
 
 Observability はイベント列の完全一致を要求しません。必須イベントの存在と、契約上重要な部分順序だけを見ます。仕様が要求する観測は JSONL events、Git 状態、GitHub API 記録です。process argv の記録は Phase 7 の要求ではありません。

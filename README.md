@@ -210,7 +210,7 @@ Phase 7 の実 GitHub 実行には追加の人間側設定が必要です。
 - **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。修正は Classifier → Policy → Codex だけ
 - **CodeRabbit PR summary**: PR 本文（work-unit marker）を書き換えない。`high_level_summary: false` と `high_level_summary_in_walkthrough: true`
 - **GitHub Secrets**: Repository Secret `REVIEW_CLASSIFIER_API_KEY`（`agent-review.yml` の review orchestrator step のみ）。CodeRabbit 用ではなく Semantic Review Classifier 用。`CODEX_API_KEY` と共有しない。prepare job と execute/deliver には渡さない
-- **Actions permissions**: `agent-review.yml` は default `contents: read`。prepare は `pull-requests: read` と `checks: read`。review job は `contents: write` / `pull-requests: write` / `issues: write` / `checks: read`。`pull_request_target` は使わない
+- **Actions permissions**: `agent-review.yml` は default `contents: read`。prepare は `contents: read` / `pull-requests: read`（Checks / Statuses API は呼ばない）。review job は `contents: write` / `pull-requests: write` / `issues: write` / `checks: read` / `statuses: read`（current HEAD の Check Run と commit status の再取得）。`checks: write` と `statuses: write` は付けない。`pull_request_target` は使わない
 - **Allow GitHub Actions to write to feature branches**: review repair の commit/push が branch protection で拒否されないこと。force push / amend / rebase は使わない
 - labels: Deliver は PR 作成時に `agent:review` を適用する。CodeRabbit が current HEAD で `CODERABBIT_COMPLETED` かつ未処理 ACTIONABLE がないときだけ `agent:ready`。`CODERABBIT_SKIPPED` / failure family、限界・衝突・uncertain は `agent:escalated`、再試行可能な障害は `agent:failed`。exclusive status を重ねない
 - **Merge**: 自動 merge しない。Human が PR を merge する
