@@ -66,6 +66,8 @@ class NotificationConfig:
 @dataclass(frozen=True)
 class CodeRabbitConfig:
     actor: str
+    check_app_slug: str
+    status_context: str
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,12 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
         coderabbit=CodeRabbitConfig(
             actor=_optional_non_empty_str(
                 coderabbit, "actor", "coderabbit", default="coderabbitai[bot]"
+            ),
+            check_app_slug=_optional_non_empty_str(
+                coderabbit, "check_app_slug", "coderabbit", default="coderabbitai"
+            ),
+            status_context=_optional_non_empty_str(
+                coderabbit, "status_context", "coderabbit", default="CodeRabbit"
             ),
         ),
     )

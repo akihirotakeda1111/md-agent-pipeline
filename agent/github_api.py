@@ -8,6 +8,9 @@ Official references (verified 2026-08-17 / 2026-08-19):
 - Issue comments: https://docs.github.com/en/rest/issues/comments
 - Create issue: https://docs.github.com/en/rest/issues/issues
 - Contents: https://docs.github.com/en/rest/repos/contents
+- Check runs: https://docs.github.com/en/rest/checks/runs
+- Commit statuses: https://docs.github.com/en/rest/commits/statuses
+- Commit pull requests: https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit
 - Headers: Accept application/vnd.github+json, Authorization Bearer,
   X-GitHub-Api-Version 2026-03-10
 """
@@ -270,6 +273,45 @@ class GitHubClient:
             )
         return entries
 
+    def list_check_runs_for_ref(self, ref: str) -> list[dict[str, Any]]:
+        commit = quote(_require_git_ref(ref), safe="")
+        items: list[dict[str, Any]] = []
+        page = 1
+        while page <= 50:
+            response = self.request(
+                "GET",
+                f"/repos/{self.owner}/{self.repo}/commits/{commit}/check-runs",
+                query={"per_page": "100", "page": str(page)},
+            )
+            payload = response.payload
+            if not isinstance(payload, dict):
+                raise AgentError.environment_failure(
+                    "GitHub check-runs response is not an object",
+                    code="GITHUB_API_FAILURE",
+                )
+            batch = payload.get("check_runs")
+            if not isinstance(batch, list):
+                raise AgentError.environment_failure(
+                    "GitHub check-runs list is missing",
+                    code="GITHUB_API_FAILURE",
+                )
+            items.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < 100:
+                return items
+            page += 1
+        raise AgentError.environment_failure(
+            "GitHub check-run pagination exceeded the fail-closed page limit",
+            code="GITHUB_API_FAILURE",
+        )
+
+    def list_commit_statuses_for_ref(self, ref: str) -> list[dict[str, Any]]:
+        commit = quote(_require_git_ref(ref), safe="")
+        return self._list_paginated(f"/repos/{self.owner}/{self.repo}/commits/{commit}/statuses")
+
+    def list_pulls_for_commit(self, sha: str) -> list[dict[str, Any]]:
+        commit = quote(_require_git_ref(sha), safe="")
+        return self._list_paginated(f"/repos/{self.owner}/{self.repo}/commits/{commit}/pulls")
+
     def list_reviews(self, pull_number: int) -> list[dict[str, Any]]:
         return self._list_paginated(f"/repos/{self.owner}/{self.repo}/pulls/{pull_number}/reviews")
 
@@ -416,7 +458,7 @@ def _payload_message(payload: Any) -> str:
 def _require_git_ref(ref: str) -> str:
     value = ref.strip()
     if not value:
-        raise AgentError.invalid_input("git ref is required to read repository content")
+        raise AgentError.invalid_input("git ref is required")
     return value
 
 

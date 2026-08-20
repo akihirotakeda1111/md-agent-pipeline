@@ -49,6 +49,7 @@ from agent.review_collect import collect_review_feedback, head_sha_from_pull
 from agent.review_filter import applies_to_current_head, prefilter_reason
 from agent.review_policy import decide_review_policy
 from agent.review_prepare import find_spec_by_id
+from agent.review_terminal import CodeRabbitTerminal, collect_coderabbit_terminal
 from agent.review_prompt import build_review_repair_prompt
 from agent.review_track import (
     REVIEW_STATE_START,
@@ -195,13 +196,23 @@ def _run_review(
     track_id, track = load_review_track(
         client, pull_number, spec, track_author=cfg.review.track_author
     )
+    terminal = collect_coderabbit_terminal(client, head_sha_expected, cfg.coderabbit)
+    if terminal.is_escalating():
+        return _escalate(
+            client,
+            spec,
+            pull_number,
+            track,
+            f"CodeRabbit terminal is {terminal.kind.value}",
+            terminal.escalation_code(),
+        )
     items = collect_review_feedback(client, pull_number, actor=cfg.coderabbit.actor)
     emit(
         REVIEW_COLLECTED,
         f"collected {len(items)} CodeRabbit comments",
         task_id=spec.id,
         phase="review",
-        extra={"count": len(items)},
+        extra={"count": len(items), "terminal": terminal.to_json_dict()},
     )
     processed = track.processed_set()
     skipped: list[str] = []
@@ -264,6 +275,7 @@ def _run_review(
             updated,
             head_sha_expected,
             track_id,
+            terminal,
             "no unprocessed CodeRabbit feedback on the current HEAD",
         )
 
@@ -351,6 +363,7 @@ def _run_review(
             updated,
             head_sha_expected,
             track_id,
+            terminal,
             "no actionable CodeRabbit feedback on the current HEAD",
         )
 
@@ -623,6 +636,7 @@ def _convergence_result(
     track: ReviewTrack,
     head_sha_expected: str,
     track_id: int | None,
+    terminal: CodeRabbitTerminal,
     message: str,
 ) -> ReviewResult:
     current = [
@@ -637,12 +651,12 @@ def _convergence_result(
             track,
             "unprocessed review comments remain on the current HEAD",
         )
-    if not current:
+    if not terminal.is_completed():
         return _in_review(
             spec,
             pull_number,
             track,
-            "no CodeRabbit feedback on the current HEAD yet",
+            "no CodeRabbit terminal evidence on the current HEAD yet",
         )
     bound = with_processed(track, (), increment=False, head_sha=head_sha_expected)
     persist_review_track(client, pull_number, track_id, bound)

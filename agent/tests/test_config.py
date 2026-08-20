@@ -29,6 +29,8 @@ def test_load_default_config() -> None:
     assert config.notification.enabled is False
     assert config.notification.mention is None
     assert config.coderabbit.actor == "coderabbitai[bot]"
+    assert config.coderabbit.check_app_slug == "coderabbitai"
+    assert config.coderabbit.status_context == "CodeRabbit"
 
 
 def test_load_config_from_explicit_path(tmp_path: Path) -> None:
@@ -52,6 +54,8 @@ def test_load_config_from_explicit_path(tmp_path: Path) -> None:
     assert config.retry.repair_attempt_limit == 1
     assert config.retry.review_attempt_limit == 0
     assert config.coderabbit.actor == "review-bot"
+    assert config.coderabbit.check_app_slug == "coderabbitai"
+    assert config.coderabbit.status_context == "CodeRabbit"
 
 
 def test_missing_config_file_is_environment_failure(tmp_path: Path) -> None:

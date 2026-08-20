@@ -21,6 +21,10 @@
 #
 # Official references:
 # - https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows
+# - https://docs.github.com/en/webhooks/webhook-events-and-payloads#check_run
+# - https://docs.github.com/en/webhooks/webhook-events-and-payloads#status
+# - https://docs.github.com/en/rest/checks/runs
+# - https://docs.github.com/en/rest/commits/statuses
 # - https://docs.github.com/en/rest/pulls/reviews
 # - https://docs.github.com/en/rest/pulls/comments
 # - https://docs.github.com/en/rest/issues/comments
@@ -36,22 +40,28 @@ on:
     types: [created, edited]
   issue_comment:
     types: [created, edited]
+  # Dual transport until a live COMPLETED/SKIPPED payload locks one:
+  # CodeRabbit review_progress uses check runs; commit_status uses statuses.
+  check_run:
+    types: [completed]
+  status:
 
 permissions:
   contents: read
 
 concurrency:
-  group: agent-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: agent-review-${{ github.event.pull_request.number || github.event.issue.number || github.event.check_run.pull_requests[0].number || github.event.check_run.head_sha || github.event.sha }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     name: Prepare review
-    if: ${{ (github.event_name != 'issue_comment' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'issue_comment' && github.event.issue.pull_request) }}
+    if: ${{ (github.event_name == 'issue_comment' && github.event.issue.pull_request) || (github.event_name == 'pull_request_review' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request_review_comment' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'check_run' && github.event.check_run.status == 'completed') || (github.event_name == 'status') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
+      checks: read
     outputs:
       should_review: ${{ steps.gate.outputs.should_review }}
       pull_number: ${{ steps.gate.outputs.pull_number }}
@@ -94,6 +104,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      checks: read
     steps:
       - name: Checkout trusted orchestrator
         uses: actions/checkout@v7

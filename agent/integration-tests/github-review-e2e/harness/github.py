@@ -5,6 +5,12 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from .coderabbit_terminal import (
+    KIND_COMPLETED,
+    KIND_FAILED,
+    KIND_SKIPPED,
+    resolve_coderabbit_terminal,
+)
 from .models import (
     EnvironmentBlocker,
     ExternalServiceBlocker,
@@ -19,6 +25,7 @@ from .process import CommandError, run
 ACTIVE_RUN_STATUSES = frozenset(
     {"queued", "in_progress", "waiting", "pending", "requested", "waiting_for_review"}
 )
+TERMINAL_WAKE_EVENTS = frozenset({"check_run", "status"})
 
 
 class GitHub:
@@ -141,6 +148,8 @@ class GitHub:
         event: str | None = None,
         actor: str | None = None,
         correlation_text: str | None = None,
+        head_sha: str | None = None,
+        allow_terminal_events: bool = False,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
         observed: list[dict[str, str]] = []
@@ -156,6 +165,7 @@ class GitHub:
                     "event": str(item.get("event")),
                     "actor": str((item.get("actor") or {}).get("login") or ""),
                     "display_title": str(item.get("display_title") or ""),
+                    "head_sha": str(item.get("head_sha") or ""),
                 }
                 for item in candidates
             ]
@@ -164,12 +174,22 @@ class GitHub:
                     item
                     for item in candidates
                     if str((item.get("actor") or {}).get("login") or "") == actor
+                    or (
+                        allow_terminal_events
+                        and str(item.get("event") or "") in TERMINAL_WAKE_EVENTS
+                    )
                 ]
             if correlation_text:
+                token = correlation_text.lower()
                 candidates = [
                     item
                     for item in candidates
-                    if correlation_text.lower() in str(item.get("display_title") or "").lower()
+                    if token in str(item.get("display_title") or "").lower()
+                    or (head_sha is not None and str(item.get("head_sha") or "") == head_sha)
+                ]
+            elif head_sha is not None:
+                candidates = [
+                    item for item in candidates if str(item.get("head_sha") or "") == head_sha
                 ]
             if candidates:
                 return sorted(candidates, key=lambda item: str(item.get("created_at") or ""))[0]
@@ -180,6 +200,7 @@ class GitHub:
                 "event": event,
                 "actor": actor,
                 "correlation_text": correlation_text,
+                "head_sha": head_sha,
                 "observed_new_runs": observed,
             },
         )
@@ -332,6 +353,101 @@ class GitHub:
                 "head_sha": head_sha,
                 "observed_actors": sorted(observed_actors),
             },
+        )
+
+    def list_check_runs(self, sha: str) -> list[dict[str, Any]]:
+        data = self.api(
+            f"repos/{self.repo}/commits/{sha}/check-runs",
+            fields={"per_page": "100"},
+        )
+        if not isinstance(data, dict):
+            return []
+        runs = data.get("check_runs")
+        return [item for item in runs if isinstance(item, dict)] if isinstance(runs, list) else []
+
+    def list_commit_statuses(self, sha: str) -> list[dict[str, Any]]:
+        data = self.api(
+            f"repos/{self.repo}/commits/{sha}/statuses",
+            fields={"per_page": "100"},
+        )
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
+
+    def coderabbit_terminal(
+        self,
+        sha: str,
+        *,
+        actor: str,
+        check_app_slug: str,
+        status_context: str,
+    ) -> dict[str, str]:
+        return resolve_coderabbit_terminal(
+            self.list_check_runs(sha),
+            self.list_commit_statuses(sha),
+            head_sha=sha,
+            actor=actor,
+            check_app_slug=check_app_slug,
+            status_context=status_context,
+        )
+
+    def wait_for_scenario_a_signal(
+        self,
+        *,
+        pr_number: int,
+        head_sha: str,
+        actor: str,
+        check_app_slug: str,
+        status_context: str,
+        known_ids: set[tuple[str, int, str]],
+        workflow_id: int,
+        baseline_ids: set[int],
+        timeout_seconds: int,
+        correlation_text: str,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            runs = [
+                item
+                for item in self.list_workflow_runs(workflow_id)
+                if int(item["id"]) not in baseline_ids
+            ]
+            matching_runs = []
+            token = correlation_text.lower()
+            for item in runs:
+                event_name = str(item.get("event") or "")
+                run_actor = str((item.get("actor") or {}).get("login") or "")
+                title = str(item.get("display_title") or "").lower()
+                run_sha = str(item.get("head_sha") or "")
+                actor_ok = run_actor == actor or event_name in TERMINAL_WAKE_EVENTS
+                correlated = token in title or run_sha == head_sha
+                if actor_ok and correlated:
+                    matching_runs.append(item)
+            if matching_runs:
+                chosen = sorted(matching_runs, key=lambda item: str(item.get("created_at") or ""))[0]
+                return {"kind": "run", "run": chosen}
+
+            terminal = self.coderabbit_terminal(
+                head_sha,
+                actor=actor,
+                check_app_slug=check_app_slug,
+                status_context=status_context,
+            )
+            if terminal["kind"] in {KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED}:
+                return {"kind": "terminal", "terminal": terminal}
+
+            feedback = [
+                item
+                for item in self.list_feedback(pr_number)
+                if (item.kind, item.source_id, item.updated_at) not in known_ids
+                and item.actor == actor
+            ]
+            if feedback:
+                return {"kind": "feedback", "items": feedback}
+            time.sleep(self.poll_seconds)
+        raise ExternalServiceBlocker(
+            "CodeRabbit terminal, feedback, or review run was not observed before timeout",
+            evidence={"head_sha": head_sha, "configured_actor": actor},
         )
 
     def branch_sha(self, branch: str) -> str:

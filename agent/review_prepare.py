@@ -12,8 +12,11 @@ from agent.errors import AgentError
 from agent.github_api import GitHubClient, github_client_from_env
 from agent.pr import is_same_work_unit_pull, parse_work_unit_marker
 from agent.review_collect import head_repo_full_name, head_sha_from_pull
-from agent.review_filter import is_configured_actor
 from agent.spec import TaskSpec, parse_spec, parse_spec_text
+from agent.review_terminal import (
+    event_commit_sha,
+    has_coderabbit_event_identity,
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,11 @@ def pull_number_from_event(payload: dict[str, Any]) -> int | None:
         and isinstance(issue.get("number"), int)
     ):
         return issue["number"]
+    check_run = payload.get("check_run")
+    if isinstance(check_run, dict):
+        numbers = _unique_pull_numbers(check_run.get("pull_requests"))
+        if len(numbers) == 1:
+            return numbers[0]
     return None
 
 
@@ -178,14 +186,17 @@ def prepare_review(
 ) -> ReviewPrepareResult:
     cfg = config or load_config()
     client = github or github_client_from_env()
+    if not has_coderabbit_event_identity(event_payload, cfg.coderabbit):
+        number = pull_number_from_event(event_payload)
+        return _skip(
+            pull_number=number or 0,
+            reason="event actor is not the configured CodeRabbit actor",
+        )
     number = pull_number_from_event(event_payload)
     if number is None:
+        number = _resolve_pull_number_from_sha(client, event_payload)
+    if number is None:
         return _skip(reason="event is not attached to a pull request")
-    actor = sender_login(event_payload)
-    if not is_configured_actor(actor, cfg.coderabbit.actor):
-        return _skip(
-            pull_number=number, reason="event actor is not the configured CodeRabbit actor"
-        )
     pull = client.get_pull(number)
     api_number = pull.get("number")
     if not isinstance(api_number, int) or isinstance(api_number, bool) or api_number != number:
@@ -235,6 +246,37 @@ def prepare_review(
         spec_path=spec_path,
         reason="ok",
     )
+
+
+def _unique_pull_numbers(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    numbers: list[int] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("number")
+        if isinstance(number, int) and not isinstance(number, bool):
+            numbers.append(number)
+    return sorted(set(numbers))
+
+
+def _resolve_pull_number_from_sha(client: GitHubClient, payload: dict[str, Any]) -> int | None:
+    sha = event_commit_sha(payload)
+    if not sha:
+        return None
+    check_run = payload.get("check_run")
+    if isinstance(check_run, dict) and len(_unique_pull_numbers(check_run.get("pull_requests"))) > 1:
+        return None
+    open_pulls = [
+        item
+        for item in client.list_pulls_for_commit(sha)
+        if str(item.get("state") or "") == "open" and isinstance(item.get("number"), int)
+    ]
+    unique = sorted({int(item["number"]) for item in open_pulls})
+    if len(unique) != 1:
+        return None
+    return unique[0]
 
 
 def _skip(

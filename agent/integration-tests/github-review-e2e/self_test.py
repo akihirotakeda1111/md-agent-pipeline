@@ -24,9 +24,16 @@ from harness.assertions import (
     assert_tracking_current_head,
     terminal_state,
 )
+from harness.coderabbit_terminal import KIND_COMPLETED, KIND_NONE, KIND_SKIPPED, resolve_coderabbit_terminal
 from harness.git import GitRepository
 from harness.github import GitHub
-from harness.models import PullRequestEvidence, RunEvidence, WorkflowInfo, report_skeleton
+from harness.models import (
+    ProductionBug,
+    PullRequestEvidence,
+    RunEvidence,
+    WorkflowInfo,
+    report_skeleton,
+)
 from harness.source_contracts import REQUIRED_FILES, inspect_source_contracts
 from harness.workflow import (
     assert_review_workflow_contract,
@@ -80,11 +87,79 @@ class HarnessTests(unittest.TestCase):
 
     def test_review_workflow_contract_is_async_and_bounded(self) -> None:
         workflow = {
+            "on": {
+                "issue_comment": {"types": ["created"]},
+                "check_run": {"types": ["completed"]},
+                "status": None,
+            },
+            "concurrency": {"group": "agent-review-pr", "cancel-in-progress": False},
+            "jobs": {},
+        }
+        self.assertEqual(
+            assert_review_workflow_contract(workflow),
+            ("issue_comment", "check_run", "status"),
+        )
+
+    def test_review_workflow_contract_requires_terminal_wakeups(self) -> None:
+        workflow = {
             "on": {"issue_comment": {"types": ["created"]}},
             "concurrency": {"group": "agent-review-pr", "cancel-in-progress": False},
             "jobs": {},
         }
-        self.assertEqual(assert_review_workflow_contract(workflow), ("issue_comment",))
+        with self.assertRaises(ProductionBug):
+            assert_review_workflow_contract(workflow)
+
+    def test_harness_terminal_mapper_ignores_old_head_and_maps_skipped(self) -> None:
+        completed = resolve_coderabbit_terminal(
+            [
+                {
+                    "head_sha": "abc",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "completed_at": "2026-08-20T00:00:00Z",
+                    "app": {"slug": "coderabbitai"},
+                }
+            ],
+            [],
+            head_sha="abc",
+            actor="coderabbitai[bot]",
+            check_app_slug="coderabbitai",
+            status_context="CodeRabbit",
+        )
+        skipped = resolve_coderabbit_terminal(
+            [
+                {
+                    "head_sha": "abc",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "completed_at": "2026-08-20T00:00:00Z",
+                    "app": {"slug": "coderabbitai"},
+                }
+            ],
+            [],
+            head_sha="abc",
+            actor="coderabbitai[bot]",
+            check_app_slug="coderabbitai",
+            status_context="CodeRabbit",
+        )
+        stale = resolve_coderabbit_terminal(
+            [
+                {
+                    "head_sha": "old",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "app": {"slug": "coderabbitai"},
+                }
+            ],
+            [],
+            head_sha="new",
+            actor="coderabbitai[bot]",
+            check_app_slug="coderabbitai",
+            status_context="CodeRabbit",
+        )
+        self.assertEqual(completed["kind"], KIND_COMPLETED)
+        self.assertEqual(skipped["kind"], KIND_SKIPPED)
+        self.assertEqual(stale["kind"], KIND_NONE)
 
     def test_run_pr_review_and_scope_assertions(self) -> None:
         execute_workflow = WorkflowInfo(
@@ -152,7 +227,25 @@ class HarnessTests(unittest.TestCase):
             {"Prepare review": "success", "Review and repair": "success"},
             ("REVIEW_RECEIVED", "REVIEW_CLASSIFIED"),
         )
-        assert_review_run(review, configured_actor=actor, supported_events=("issue_comment",))
+        assert_review_run(
+            review, configured_actor=actor, supported_events=("issue_comment", "check_run")
+        )
+        check_run = RunEvidence(
+            13,
+            1,
+            "https://example.invalid/runs/13",
+            "b" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "READY_FOR_HUMAN"),
+        )
+        assert_review_run(
+            check_run, configured_actor=actor, supported_events=("issue_comment", "check_run")
+        )
         negative = RunEvidence(
             12,
             1,
@@ -208,7 +301,11 @@ class HarnessTests(unittest.TestCase):
             (root / "agent" / "config.json").write_text(
                 json.dumps(
                     {
-                        "coderabbit": {"actor": "observed-review-actor"},
+                        "coderabbit": {
+                            "actor": "observed-review-actor",
+                            "check_app_slug": "observed-app",
+                            "status_context": "ObservedRabbit",
+                        },
                         "review": {
                             "classifier_model": "pinned-model-snapshot",
                             "track_author": "orchestrator-bot",
@@ -226,6 +323,8 @@ class HarnessTests(unittest.TestCase):
                                 "auto_incremental_review": True,
                                 "base_branches": ["e2e/phase7-.*"],
                             },
+                            "review_status": True,
+                            "review_progress": True,
                             "finishing_touches": {"autofix": {"enabled": False}},
                         }
                     }
@@ -234,6 +333,8 @@ class HarnessTests(unittest.TestCase):
             )
             result = inspect_source_contracts(root)
             self.assertEqual(result["coderabbit_actor"], "observed-review-actor")
+            self.assertEqual(result["coderabbit_check_app_slug"], "observed-app")
+            self.assertEqual(result["coderabbit_status_context"], "ObservedRabbit")
             self.assertIn(".agent/phases/07-coderabbit-review.md", result["files"])
 
     def test_report_has_scenarios_cleanup_and_classification_fields(self) -> None:

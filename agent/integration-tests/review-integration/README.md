@@ -48,6 +48,8 @@ GitHub event（wake-up のみ）
   -> prepare_review
        actor / PR identity / work-unit / fork / HEAD 再取得
   -> run_review
+       collect CodeRabbit terminal on current HEAD (Checks + commit statuses)
+       SKIPPED / failure family -> ESCALATED (classifier / Codex / git write なし)
        collect current CodeRabbit feedback
        -> deterministic pre-filter
        -> Structured Output classifier + schema validation
@@ -55,6 +57,7 @@ GitHub event（wake-up のみ）
        -> ACTIONABLE?  no -> ignore / escalate / IN_REVIEW / READY_FOR_HUMAN
                     yes -> Codex fix -> Scope -> all Task Validation -> FV
                          -> commit -> push
+       READY は CODERABBIT_COMPLETED + current HEAD + 未処理 ACTIONABLE なし のみ
 ```
 
 Event payload だけをレビュー全体と見なしません。PR number は wake-up event と API 再取得結果を照合し、矛盾時は fail-closed です。classifier 結果は必ず Policy を通ります。Codex は実装エンジンであり、GitHub / classifier credential を受け取りません。
@@ -72,6 +75,7 @@ workflow YAML は構造解析のみです。`agent-review.yml` は execute workf
 | R05〜R11 | classifier / policy | schema、confidence、5 enum、allowed / referenced paths |
 | R12〜R16 | repair | Codex、Scope、全 Task Validation、FV、commit/push、attempt limit |
 | R17〜R21 | identity / convergence | duplicate、edited revision、pending current-HEAD、READY |
+| R25〜R30 | terminal | COMPLETED+0/NON_ACTIONABLE → READY、COMPLETED+ACTIONABLE → repair、SKIPPED → ESCALATED、terminalなし+0 → IN_REVIEW、old HEAD無視 |
 | R22〜R24 | observability | 必須イベントの存在と有意な部分順序 |
 | W01〜W06 | workflow / security | 非同期 trigger、concurrency、permissions、checkout、credential 配置と subprocess 隔離 |
 | H01〜H03 | harness | 実 Git、dumb Fake、JSONL observations |
@@ -87,7 +91,7 @@ REVIEW_RECEIVED
 < REVIEW_FIX_VALIDATION_PASSED
 ```
 
-READY は current HEAD の再取得セットが処理済みのときだけです。duplicate だけでは READY にしません。obsolete head だけのときは `IN_REVIEW` のままにし、READY にしません。
+READY は current HEAD の CodeRabbit terminal が `CODERABBIT_COMPLETED` で、未処理 ACTIONABLE が無いときだけです。feedback 0件でも COMPLETED なら READY を許可します。duplicate だけでは READY にしません。obsolete head だけのときは `IN_REVIEW` のままにし、READY にしません。SKIPPED は classifier / Codex / Git write なしで ESCALATED です。
 
 ## 実行
 

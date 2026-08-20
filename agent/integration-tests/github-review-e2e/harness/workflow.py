@@ -130,15 +130,27 @@ def resolve_dispatch_inputs(
     return values
 
 
+COMMENT_REVIEW_EVENTS = frozenset(
+    {"pull_request_review", "pull_request_review_comment", "issue_comment"}
+)
+TERMINAL_REVIEW_EVENTS = frozenset({"check_run", "status"})
+SUPPORTED_REVIEW_EVENTS = COMMENT_REVIEW_EVENTS | TERMINAL_REVIEW_EVENTS
+
+
 def review_event_names(workflow: dict[str, Any]) -> tuple[str, ...]:
-    supported = {"pull_request_review", "pull_request_review_comment", "issue_comment"}
-    return tuple(name for name in triggers(workflow) if name in supported)
+    return tuple(name for name in triggers(workflow) if name in SUPPORTED_REVIEW_EVENTS)
 
 
 def assert_review_workflow_contract(workflow: dict[str, Any]) -> tuple[str, ...]:
     events = review_event_names(workflow)
-    if not events:
+    if not (set(events) & COMMENT_REVIEW_EVENTS):
         raise ProductionBug("agent-review.yml has no supported asynchronous review event")
+    missing_terminal = sorted(TERMINAL_REVIEW_EVENTS - set(events))
+    if missing_terminal:
+        raise ProductionBug(
+            "agent-review.yml missing CodeRabbit terminal wake-up event(s): "
+            f"{missing_terminal}"
+        )
     text = str(workflow).lower()
     if "pull_request_target" in text:
         raise ProductionBug("agent-review.yml uses forbidden pull_request_target")

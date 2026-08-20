@@ -23,6 +23,7 @@ from harness.assertions import (
     assert_tracking_current_head,
     terminal_state,
 )
+from harness.coderabbit_terminal import KIND_COMPLETED, KIND_FAILED, KIND_SKIPPED
 from harness.git import GitRepository
 from harness.github import GitHub
 from harness.models import (
@@ -289,6 +290,8 @@ def main() -> int:
                 default_branch=str(repo_data["default_branch"]),
             )
             configured_actor = str(contracts["coderabbit_actor"])
+            configured_check_app_slug = str(contracts["coderabbit_check_app_slug"])
+            configured_status_context = str(contracts["coderabbit_status_context"])
             if viewer_login == configured_actor:
                 raise EnvironmentBlocker(
                     "Harness GitHub actor must differ from coderabbit.actor for Scenario B"
@@ -394,31 +397,70 @@ def main() -> int:
             known_feedback: set[tuple[str, int, str]] = set()
             convergence_deadline = time.monotonic() + args.convergence_timeout_seconds
             all_events: list[str] = []
+            scenario_a_state: str | None = None
+            scenario_a_terminal: dict[str, str] | None = None
             while True:
-                feedback = github.wait_for_coderabbit_feedback(
-                    pr.number,
-                    configured_actor,
+                signal = github.wait_for_scenario_a_signal(
+                    pr_number=pr.number,
                     head_sha=current_head,
-                    known_ids=known_feedback,
-                    timeout_seconds=remaining_timeout(
-                        convergence_deadline, args.review_timeout_seconds
-                    ),
-                )
-                for item in feedback:
-                    identity = (item.kind, item.source_id, item.updated_at)
-                    if identity not in known_feedback:
-                        report["scenario_a"]["feedback"].append(feedback_dict(item))
-                        known_feedback.add(identity)
-
-                raw_run = github.wait_new_review_run(
-                    review_workflow.id,
-                    seen_review_runs,
-                    timeout_seconds=remaining_timeout(
-                        convergence_deadline, args.review_timeout_seconds
-                    ),
                     actor=configured_actor,
+                    check_app_slug=configured_check_app_slug,
+                    status_context=configured_status_context,
+                    known_ids=known_feedback,
+                    workflow_id=review_workflow.id,
+                    baseline_ids=seen_review_runs,
+                    timeout_seconds=remaining_timeout(
+                        convergence_deadline, args.review_timeout_seconds
+                    ),
                     correlation_text=suffix,
                 )
+                if signal["kind"] == "feedback":
+                    for item in signal["items"]:
+                        identity = (item.kind, item.source_id, item.updated_at)
+                        if identity not in known_feedback:
+                            report["scenario_a"]["feedback"].append(feedback_dict(item))
+                            known_feedback.add(identity)
+                    continue
+
+                if signal["kind"] == "terminal":
+                    scenario_a_terminal = signal["terminal"]
+                    if signal["terminal"]["kind"] == KIND_FAILED:
+                        raise ExternalServiceBlocker(
+                            "CodeRabbit terminal on the current HEAD is a failure family",
+                            evidence=signal["terminal"],
+                        )
+                    updated = github.pr_evidence(pr.number)
+                    assert not updated.merged and updated.auto_merge is None
+                    if updated.head_sha == current_head:
+                        state = terminal_state(updated)
+                        if (
+                            signal["terminal"]["kind"] == KIND_COMPLETED
+                            and state == "READY_FOR_HUMAN"
+                        ):
+                            pr = updated
+                            scenario_a_state = "READY_FOR_HUMAN"
+                            break
+                        if (
+                            signal["terminal"]["kind"] == KIND_SKIPPED
+                            and state == "ESCALATED"
+                        ):
+                            pr = updated
+                            scenario_a_state = "ESCALATED"
+                            break
+                    raw_run = github.wait_new_review_run(
+                        review_workflow.id,
+                        seen_review_runs,
+                        timeout_seconds=remaining_timeout(
+                            convergence_deadline, args.review_timeout_seconds
+                        ),
+                        actor=configured_actor,
+                        correlation_text=suffix,
+                        head_sha=current_head,
+                        allow_terminal_events=True,
+                    )
+                else:
+                    raw_run = signal["run"]
+
                 run_id = int(raw_run["id"])
                 seen_review_runs.add(run_id)
                 completed = github.wait_attempt(
@@ -453,35 +495,76 @@ def main() -> int:
                     )
                     current_head = updated.head_sha
                     report["scenario_a"]["head_history"].append(current_head)
+                    scenario_a_terminal = None
                     continue
 
+                observed_terminal = github.coderabbit_terminal(
+                    current_head,
+                    actor=configured_actor,
+                    check_app_slug=configured_check_app_slug,
+                    status_context=configured_status_context,
+                )
+                scenario_a_terminal = observed_terminal
                 state = terminal_state(updated)
-                if state == "READY_FOR_HUMAN":
+                if (
+                    observed_terminal["kind"] == KIND_COMPLETED
+                    and state == "READY_FOR_HUMAN"
+                ):
                     pr = updated
+                    scenario_a_state = "READY_FOR_HUMAN"
                     break
+                if (
+                    observed_terminal["kind"] == KIND_SKIPPED
+                    and state == "ESCALATED"
+                ):
+                    pr = updated
+                    scenario_a_state = "ESCALATED"
+                    break
+                if observed_terminal["kind"] == KIND_FAILED:
+                    raise ExternalServiceBlocker(
+                        "CodeRabbit terminal on the current HEAD is a failure family",
+                        evidence=observed_terminal,
+                    )
                 if state in {"ESCALATED", "FAILED"}:
                     raise ProductionBug(
-                        f"Scenario A did not converge to READY_FOR_HUMAN: {state}",
-                        evidence={"labels": list(updated.labels), "events": all_events},
+                        "Scenario A reached a terminal PR label without CodeRabbit "
+                        f"COMPLETED/SKIPPED evidence: {state}",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": observed_terminal,
+                        },
                     )
 
-            required_events = {"REVIEW_RECEIVED", "REVIEW_COLLECTED", "REVIEW_CLASSIFIED", "REVIEW_POLICY_APPLIED", "READY_FOR_HUMAN"}
+            if scenario_a_state is None or scenario_a_terminal is None:
+                raise ProductionBug("Scenario A ended without a CodeRabbit terminal outcome")
+            if scenario_a_state == "READY_FOR_HUMAN":
+                required_events = {"REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"}
+                if report["scenario_a"]["feedback"]:
+                    required_events.update({"REVIEW_CLASSIFIED", "REVIEW_POLICY_APPLIED"})
+            else:
+                required_events = {"REVIEW_RECEIVED", "REVIEW_ESCALATED"}
             missing_events = sorted(required_events - set(all_events))
             if missing_events:
                 raise ProductionBug(
                     f"Scenario A structured event(s) not observable: {missing_events}"
                 )
-            tracking = github.tracking_comments(pr.number, TRACKING_MARKER)
-            assert_tracking_current_head(tracking, scenario, current_head)
+            if scenario_a_state == "READY_FOR_HUMAN":
+                tracking = github.tracking_comments(pr.number, TRACKING_MARKER)
+                assert_tracking_current_head(tracking, scenario, current_head)
+                tracking_id = tracking[0].get("id")
+            else:
+                tracking_id = None
             repair_count = len(report["scenario_a"].get("repairs", []))
             report["scenario_a"].update(
                 {
-                    "final_state": "READY_FOR_HUMAN",
+                    "final_state": scenario_a_state,
+                    "coderabbit_terminal": scenario_a_terminal,
                     "final_head_sha": current_head,
-                    "current_head_feedback_converged": True,
+                    "current_head_feedback_converged": scenario_a_state == "READY_FOR_HUMAN",
                     "actionable_repair_observed": repair_count > 0,
                     "repair_count": repair_count,
-                    "tracking_comment_id": tracking[0].get("id"),
+                    "tracking_comment_id": tracking_id,
                     "automatic_merge": pr.auto_merge,
                     "merged": pr.merged,
                 }
@@ -491,6 +574,7 @@ def main() -> int:
             # reject it before classifier/Codex while preserving the converged PR.
             b_baseline = github.workflow_run_ids(review_workflow.id)
             b_head = current_head
+            b_state = scenario_a_state
             marker = f"<!-- phase7-e2e-non-coderabbit:{suffix} -->"
             wakeup = github.create_non_coderabbit_wakeup(
                 pr.number,
@@ -512,7 +596,14 @@ def main() -> int:
             assert_non_coderabbit_short_circuit(b_run, configured_actor)
             after_b = github.pr_evidence(pr.number)
             assert after_b.head_sha == b_head, "non-CodeRabbit wake-up changed PR HEAD"
-            assert terminal_state(after_b) == "READY_FOR_HUMAN"
+            assert terminal_state(after_b) == b_state
+            after_terminal = github.coderabbit_terminal(
+                after_b.head_sha,
+                actor=configured_actor,
+                check_app_slug=configured_check_app_slug,
+                status_context=configured_status_context,
+            )
+            assert after_terminal["kind"] == scenario_a_terminal["kind"]
             assert not after_b.merged and after_b.auto_merge is None
             report["scenario_b"].update(
                 {
@@ -523,6 +614,7 @@ def main() -> int:
                     "head_before": b_head,
                     "head_after": after_b.head_sha,
                     "terminal_state_after": terminal_state(after_b),
+                    "coderabbit_terminal_after": after_terminal,
                 }
             )
 

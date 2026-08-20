@@ -222,8 +222,52 @@ class FakeGithub:
         self.reviews: list[dict] = []
         self.review_comments: list[dict] = []
         self.issue_comments: list[dict] = []
+        self.check_runs: list[dict] = []
+        self.commit_statuses: list[dict] = []
+        self.commit_pulls: list[dict] | None = None
         self.labels: set[str] = set()
         self.next_id = 200
+
+    def add_check_run(
+        self,
+        *,
+        head_sha: str,
+        conclusion: str = "success",
+        status: str = "completed",
+        app_slug: str = "coderabbitai",
+        completed_at: str = "2026-08-20T00:00:00Z",
+    ) -> None:
+        self.check_runs.append(
+            {
+                "id": self.next_id,
+                "head_sha": head_sha,
+                "status": status,
+                "conclusion": conclusion,
+                "completed_at": completed_at,
+                "app": {"slug": app_slug},
+            }
+        )
+        self.next_id += 1
+
+    def add_commit_status(
+        self,
+        *,
+        sha: str,
+        state: str = "success",
+        context: str = "CodeRabbit",
+        updated_at: str = "2026-08-20T00:00:00Z",
+    ) -> None:
+        self.commit_statuses.append(
+            {
+                "id": self.next_id,
+                "sha": sha,
+                "state": state,
+                "context": context,
+                "updated_at": updated_at,
+                "creator": {"login": ACTOR},
+            }
+        )
+        self.next_id += 1
 
     def add_review_comment(
         self,
@@ -254,6 +298,21 @@ class FakeGithub:
         if method == "GET" and "/contents/" in path:
             relative = unquote(path.split("/contents/", 1)[1])
             return self._contents(relative, (query.get("ref") or [""])[0], url)
+        if method == "GET" and path.endswith("/check-runs"):
+            sha = unquote(path.split("/commits/", 1)[1].split("/", 1)[0])
+            return 200, {
+                "check_runs": [item for item in self.check_runs if item.get("head_sha") == sha]
+            }
+        if method == "GET" and "/commits/" in path and path.endswith("/statuses"):
+            sha = unquote(path.split("/commits/", 1)[1].split("/", 1)[0])
+            return 200, [item for item in self.commit_statuses if item.get("sha") == sha]
+        if method == "GET" and "/commits/" in path and path.endswith("/pulls"):
+            sha = unquote(path.split("/commits/", 1)[1].split("/", 1)[0])
+            if self.commit_pulls is not None:
+                return 200, list(self.commit_pulls)
+            if str((self.pull.get("head") or {}).get("sha") or "") == sha:
+                return 200, [self.pull]
+            return 200, []
         if method == "GET" and path.endswith("/pulls/7"):
             return 200, self.pull
         if method == "GET" and path.endswith("/pulls/7/reviews"):
@@ -455,6 +514,7 @@ def test_duplicate_and_processed_reviews_are_ignored(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
     collected = collect_review_feedback(fake.client(), 7, actor=ACTOR)
     assert len(collected) == 1
     track = with_processed(empty_review_track(spec), (collected[0].identity,), increment=False)
@@ -486,6 +546,158 @@ def test_outdated_review_is_skipped(tmp_path: Path) -> None:
     )
     assert result.outcome == "IN_REVIEW"
     assert "current HEAD" in result.message
+
+
+def test_completed_terminal_with_no_feedback_is_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo))
+    result = _run(repo, fake, classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE))
+    assert result.outcome == "READY_FOR_HUMAN"
+    assert result.review_attempts == 0
+
+
+def test_skipped_terminal_escalates_without_classifier(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="skipped")
+    called = {"n": 0}
+
+    def classifier(item, spec):
+        called["n"] += 1
+        return _result(ReviewClassification.ACTIONABLE)
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        raise AssertionError("codex must not run")
+
+    result = _run(repo, fake, classifier=classifier, executor=executor)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "CODERABBIT_SKIPPED"
+    assert called["n"] == 0
+    assert "agent:escalated" in fake.labels
+
+
+def test_failed_terminal_escalates_without_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="timed_out")
+    result = _run(repo, fake)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "CODERABBIT_REVIEW_FAILED"
+
+
+def test_no_terminal_and_no_feedback_stays_in_review(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    result = _run(repo, FakeGithub(_pull(repo, spec)))
+    assert result.outcome == "IN_REVIEW"
+    assert "terminal evidence" in result.message
+
+
+def test_old_head_completed_terminal_is_ignored(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha="0" * 40)
+    result = _run(repo, fake)
+    assert result.outcome == "IN_REVIEW"
+
+
+def test_commit_status_completed_allows_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_commit_status(sha=head_sha(repo), state="success")
+    result = _run(repo, fake)
+    assert result.outcome == "READY_FOR_HUMAN"
+
+
+def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="success")
+    fake.add_check_run(
+        head_sha=head_sha(repo),
+        conclusion="",
+        status="in_progress",
+        completed_at="2026-08-20T01:00:00Z",
+    )
+    result = _run(repo, fake)
+    assert result.outcome == "IN_REVIEW"
+
+
+def test_prepare_resolves_check_run_without_pull_number(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    sha = head_sha(repo)
+    fake = _fake(repo, spec)
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "sender": {"login": ACTOR},
+            "check_run": {
+                "head_sha": sha,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "coderabbitai"},
+                "pull_requests": [],
+            },
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is True
+    assert result.pull_number == 7
+    assert result.head_sha == sha
+
+
+def test_prepare_accepts_status_event_identity(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    sha = head_sha(repo)
+    fake = _fake(repo, spec)
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "sender": {"login": "github-actions[bot]"},
+            "sha": sha,
+            "context": "CodeRabbit",
+            "state": "success",
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is True
+    assert result.pull_number == 7
+
+
+def test_prepare_ambiguous_commit_pulls_is_fail_closed(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    sha = head_sha(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.commit_pulls = [
+        {**fake.pull, "number": 7},
+        {**fake.pull, "number": 8},
+    ]
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "sender": {"login": ACTOR},
+            "sha": sha,
+            "context": "CodeRabbit",
+            "state": "success",
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "pull request" in result.reason
 
 
 def test_forbidden_path_review_escalates_without_codex(tmp_path: Path) -> None:
@@ -583,6 +795,7 @@ def _class_run(tmp_path: Path, label: ReviewClassification, *, confidence: float
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
     executed = {"n": 0}
 
     def executor(command, *, cwd, env, timeout, stdin):
@@ -602,6 +815,7 @@ def _class_run(tmp_path: Path, label: ReviewClassification, *, confidence: float
 def test_actionable_high_confidence_runs_repair(tmp_path: Path) -> None:
     result, count = _class_run(tmp_path, ReviewClassification.ACTIONABLE)
     assert result.outcome == "REVIEW_FIX_PUSHED"
+    assert result.outcome != "READY_FOR_HUMAN"
     assert result.review_attempts == 1
     assert count == 1
     assert result.commit_sha
@@ -828,6 +1042,7 @@ def test_edited_review_is_reprocessed(tmp_path: Path) -> None:
         commit_id=sha,
         updated_at="2026-08-19T02:00:00Z",
     )
+    fake.add_check_run(head_sha=sha)
     track = with_processed(empty_review_track(spec), (old.identity,), increment=False)
     fake.issue_comments.append(
         {

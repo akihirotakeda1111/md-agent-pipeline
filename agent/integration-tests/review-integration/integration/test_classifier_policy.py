@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from .common import assert_no_codex, current_feedback, github_responses, request
+from .common import (
+    assert_no_codex,
+    coderabbit_completed,
+    current_feedback,
+    github_responses,
+    request,
+)
 from .harness.adapters import require_status
 from .harness.fake_classifier import ClassifierStep, classification
 from .harness.fake_codex import CodexStep
@@ -52,7 +58,7 @@ def test_non_actionable_has_no_code_change_and_converges(
     feedback = current_feedback(git_repo, "non-actionable-current.json")
     head = git_repo.head
     services = service_factory(
-        github=github_responses(git_repo, [feedback]),
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
         classifier=[classification("NON_ACTIONABLE", paths=())],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)

@@ -80,9 +80,33 @@ def github_responses(
         "list_review_feedback": [feedback],
         "load_processed_reviews": [[]],
         "save_processed_reviews": [{}],
+        "list_check_runs": [[]],
+        "list_commit_statuses": [[]],
+        "list_pulls_for_commit": [[]],
     }
     responses.update(extra)
     return responses
+
+
+def coderabbit_completed(repo: GitRepo, *, conclusion: str = "success") -> dict[str, list[Any]]:
+    return {
+        "list_check_runs": [
+            [
+                {
+                    "head_sha": repo.head,
+                    "status": "completed",
+                    "conclusion": conclusion,
+                    "completed_at": "2026-08-20T00:00:00Z",
+                    "app": {"slug": "coderabbitai"},
+                }
+            ]
+        ],
+        "list_commit_statuses": [[]],
+    }
+
+
+def coderabbit_skipped(repo: GitRepo) -> dict[str, list[Any]]:
+    return coderabbit_completed(repo, conclusion="skipped")
 
 
 @dataclass(frozen=True)

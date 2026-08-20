@@ -60,46 +60,43 @@ Task Specはsingle Python fileだけを許可します。Task ValidationとFinal
 
 ## 3. Phase 7 acceptance scenarios
 
-### Scenario A — Review convergence / READY
+### Scenario A — Review convergence (dual terminal)
 
 ```text
 Production execute
 -> Real PR
--> Real CodeRabbit initial feedback
--> agent-review.yml
--> Real classifier / deterministic Policy
--> [ACTIONABLEなら]
-     Real Codex repair
-     -> linear push
-     -> incremental CodeRabbit review
--> current HEADのfeedbackが収束
--> READY_FOR_HUMAN
+-> Real CodeRabbit terminal on current HEAD
+-> agent-review.yml (comment and/or check_run/status)
+-> [COMPLETED]
+     existing classifier / Policy
+     -> [ACTIONABLEなら] Real Codex repair -> linear push -> wait again on new HEAD
+     -> no unprocessed ACTIONABLE
+     -> READY_FOR_HUMAN
+-> [SKIPPED]
+     classifier / Codex / commit / push なし
+     -> ESCALATED
 ```
 
-ACTIONABLEが無い場合はrepair/push/incremental reviewを要求せず、initial reviewを処理した
-current HEADがそのまま収束してREADYへ進むことを許可します。ACTIONABLEがある場合だけ修正branchを
-通り、new HEADに対するincremental reviewと再収束を必須にします。
+`COMPLETED` と `SKIPPED` はどちらも仕様上の正常な E2E outcome です。failure / timed_out などの FAILED family は READY にせず、E2E では blocker として扱います。feedback 0件でも `COMPLETED` なら READY を許可します。terminal evidence が無い間は `IN_REVIEW` のまま待ち、READY にしません。repair 後は旧 HEAD の COMPLETED/SKIPPED を使いません。
 
 最低限、次をassertします。
 
 - execute workflowとparse/execute/deliver jobsがsuccess。
 - open PRが1つ、head/base/work-unit/allowed fileが一致。
-- `coderabbit.actor`と同じactorの実feedbackが存在。
+- current HEADのCodeRabbit terminal（Checks または commit status）を API 再取得している。
 - その実eventが`agent-review.yml`を起動し、prepare/review jobsがsuccess。
-- structured eventsに`REVIEW_RECEIVED`、`REVIEW_COLLECTED`、
-  `REVIEW_CLASSIFIED`、`REVIEW_POLICY_APPLIED`、`READY_FOR_HUMAN`が存在。
+- COMPLETED 経路: structured eventsに`REVIEW_RECEIVED`、`REVIEW_COLLECTED`、`READY_FOR_HUMAN`。feedbackがある場合は`REVIEW_CLASSIFIED`、`REVIEW_POLICY_APPLIED`も存在。
+- SKIPPED 経路: `REVIEW_RECEIVED`、`REVIEW_ESCALATED`。classifier/Codex/Git writeなし。READYにしない。
 - ACTIONABLE repairでHEADが変わった場合に限り、`REVIEW_FIX_STARTED`、
   `REVIEW_FIX_VALIDATION_PASSED`、allowed fileだけのlinear push、new HEAD向けの
-  incremental feedbackと次review runを確認。
-- current work-unitと最終current HEADに紐づくtracking commentが1つ。
-- reportに`actionable_repair_observed`、`repair_count`、
+  incremental terminal と次review runを確認。
+- READY 経路では current work-unitと最終current HEADに紐づくtracking commentが1つ。
+- reportに`coderabbit_terminal`、`actionable_repair_observed`、`repair_count`、
   `current_head_feedback_converged`を記録。
-- 最終状態が`READY_FOR_HUMAN`、PRはopen、未merge、auto-mergeなし。
+- 最終状態は`READY_FOR_HUMAN`または`ESCALATED`（SKIPPED時）。PRはopen、未merge、auto-mergeなし。
 - 全stateのPR数が1で、重複PRなし。
 
-Scenario AでProductionが仕様どおり`ESCALATED`または`FAILED`へ到達した場合も証拠はreportへ
-保存しますが、このREADY acceptance scenario自体はFAILです。内容を固定してCodeRabbitを誘導する
-workaroundは追加しません。
+Scenario AでProductionが仕様どおり`FAILED`へ到達した場合、または COMPLETED/SKIPPED 以外で`ESCALATED`した場合は証拠をreportへ保存し、この dual-terminal acceptance は FAIL です。内容を固定してCodeRabbitを誘導する workaroundは追加しません。
 
 ### Scenario B — Non-CodeRabbit actor fail-closed
 
@@ -113,7 +110,7 @@ real non-CodeRabbit GitHub event
 -> actor mismatch
 -> review job skipped
 -> classifierなし / Codexなし / pushなし
--> READY_FOR_HUMANとHEADを維持
+-> Scenario A の terminal state と HEAD を維持
 ```
 
 これはReal external serviceを不自然に改変せず、安全に再現できるintegration contract R02相当です。
@@ -185,12 +182,12 @@ Production workflowへsleep/pollingを追加しません。HarnessだけがAPI s
 
 - `--discovery-timeout-seconds 240`: run/PR/event discovery。
 - `--execute-timeout-seconds 1800`: execute workflow完了。
-- `--review-timeout-seconds 1800`: CodeRabbit feedbackまたは各review run完了。
+- `--review-timeout-seconds 1800`: CodeRabbit terminal / feedbackまたは各review run完了。
 - `--convergence-timeout-seconds 5400`: initial reviewからREADYまでの全体上限。
 - `--poll-seconds 10`: API poll間隔。
 
 各loopは`time.monotonic()` deadlineを持ち、無期限wait、Production内wait、固定長の盲目的sleepを
-行いません。CodeRabbit feedback、workflow run、PR label/headという状態変化をpollします。
+行いません。CodeRabbit terminal、feedback、workflow run、PR label/headという状態変化をpollします。
 
 ## Source-of-Truth preflight
 

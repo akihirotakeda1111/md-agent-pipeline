@@ -23,7 +23,13 @@ def test_review_is_a_separate_async_workflow(production_root):
     trigger_text = scalar_text(workflow_triggers(workflow)).lower()
     assert any(
         name in trigger_text
-        for name in ("pull_request_review", "pull_request_review_comment", "issue_comment")
+        for name in (
+            "pull_request_review",
+            "pull_request_review_comment",
+            "issue_comment",
+            "check_run",
+            "status",
+        )
     )
     body = scalar_text(workflow).lower()
     assert "sleep " not in body
@@ -50,6 +56,14 @@ def test_same_pr_concurrency_contract(production_root):
             "inputs.pr_number",
         )
     )
+    assert any(
+        token in group
+        for token in (
+            "github.event.check_run.head_sha",
+            "github.event.sha",
+            "github.event.check_run.pull_requests",
+        )
+    )
     assert is_false(concurrency.get("cancel-in-progress")), "same-PR review runs must serialize"
 
 
@@ -58,7 +72,7 @@ def test_permissions_are_explicit_and_minimal(production_root):
     assert isinstance(workflow.get("permissions"), dict)
     for name in workflow["jobs"]:
         permissions = effective_permissions(workflow, name)
-        assert set(permissions) <= {"contents", "pull-requests", "issues"}
+        assert set(permissions) <= {"contents", "pull-requests", "issues", "checks"}
         assert all(value in {"read", "write", "none"} for value in permissions.values())
     combined = {
         key: value

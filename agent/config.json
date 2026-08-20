@@ -37,6 +37,8 @@
     "mention": null
   },
   "coderabbit": {
-    "actor": "coderabbitai[bot]"
+    "actor": "coderabbitai[bot]",
+    "check_app_slug": "coderabbitai",
+    "status_context": "CodeRabbit"
   }
 }

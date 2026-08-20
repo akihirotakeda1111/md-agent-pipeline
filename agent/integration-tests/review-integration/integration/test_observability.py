@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .common import current_feedback, github_responses, request
+from .common import coderabbit_completed, current_feedback, github_responses, request
 from .harness.fake_classifier import classification
 from .harness.fake_codex import CodexStep
 from .harness.observations import assert_in_order, event_names
@@ -49,7 +49,7 @@ def test_ready_event_is_terminal_after_collection_and_policy(
 ):
     feedback = current_feedback(git_repo, "non-actionable-current.json")
     services = service_factory(
-        github=github_responses(git_repo, [feedback]),
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
         classifier=[classification("NON_ACTIONABLE", paths=())],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)

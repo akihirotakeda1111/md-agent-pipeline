@@ -114,6 +114,27 @@ class _FakeGitHubClient:
             if _kind(item) == KIND_REVIEW_COMMENT
         ]
 
+    def list_check_runs_for_ref(self, ref: str) -> list[dict[str, Any]]:
+        payload = self._fake.request("list_check_runs", ref=ref)
+        if isinstance(payload, dict):
+            runs = payload.get("check_runs")
+            return [item for item in runs if isinstance(item, dict)] if isinstance(runs, list) else []
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    def list_commit_statuses_for_ref(self, ref: str) -> list[dict[str, Any]]:
+        payload = self._fake.request("list_commit_statuses", ref=ref)
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    def list_pulls_for_commit(self, sha: str) -> list[dict[str, Any]]:
+        payload = self._fake.request("list_pulls_for_commit", sha=sha)
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
     def list_issue_comments(self, issue_number: int) -> list[dict[str, Any]]:
         comments = [
             _as_github_issue_comment(item)

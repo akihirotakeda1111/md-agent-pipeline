@@ -73,10 +73,11 @@ def assert_pr_scope(files: list[str], scenario: Scenario) -> None:
 def assert_review_run(
     run: RunEvidence, *, configured_actor: str, supported_events: tuple[str, ...]
 ) -> None:
-    assert run.actor == configured_actor, (
-        f"review workflow actor {run.actor!r} does not match configured actor {configured_actor!r}"
-    )
     assert run.event in supported_events
+    if run.event in {"pull_request_review", "pull_request_review_comment", "issue_comment"}:
+        assert run.actor == configured_actor, (
+            f"review workflow actor {run.actor!r} does not match configured actor {configured_actor!r}"
+        )
     assert run.conclusion == "success", f"review workflow conclusion: {run.conclusion}"
     prepare = _matching_jobs(run, "prepare review")
     review = _matching_jobs(run, "review and repair")

@@ -41,10 +41,16 @@ def inspect_source_contracts(
     except (OSError, json.JSONDecodeError) as exc:
         raise ProductionBug(f"cannot parse agent/config.json: {exc}") from exc
     actor = str((config.get("coderabbit") or {}).get("actor") or "").strip()
+    check_app_slug = str((config.get("coderabbit") or {}).get("check_app_slug") or "coderabbitai").strip()
+    status_context = str((config.get("coderabbit") or {}).get("status_context") or "CodeRabbit").strip()
     classifier_model = str((config.get("review") or {}).get("classifier_model") or "").strip()
     track_author = str((config.get("review") or {}).get("track_author") or "").strip()
     if not actor:
         raise ProductionBug("agent/config.json coderabbit.actor is not configured")
+    if not check_app_slug:
+        raise ProductionBug("agent/config.json coderabbit.check_app_slug is not configured")
+    if not status_context:
+        raise ProductionBug("agent/config.json coderabbit.status_context is not configured")
     if not classifier_model:
         raise ProductionBug("agent/config.json review.classifier_model is not configured")
     if not track_author:
@@ -66,6 +72,10 @@ def inspect_source_contracts(
         raise EnvironmentBlocker("CodeRabbit incremental review is not enabled")
     if autofix.get("enabled") is not False:
         raise ProductionBug("CodeRabbit Autofix must be explicitly disabled")
+    if reviews.get("review_status") is not True:
+        raise EnvironmentBlocker("CodeRabbit review_status is not enabled")
+    if reviews.get("review_progress") is not True:
+        raise EnvironmentBlocker("CodeRabbit review_progress is not enabled")
     base_branches = auto_review.get("base_branches")
     if not isinstance(base_branches, list):
         raise ProductionBug("CodeRabbit reviews.auto_review.base_branches must be a list")
@@ -91,12 +101,16 @@ def inspect_source_contracts(
             str(path.relative_to(root)).replace("\\", "/"): _digest(path) for path in files
         },
         "coderabbit_actor": actor,
+        "coderabbit_check_app_slug": check_app_slug,
+        "coderabbit_status_context": status_context,
         "classifier_model": classifier_model,
         "track_author": track_author,
         "coderabbit": {
             "auto_review": True,
             "incremental_review": True,
             "autofix": False,
+            "review_status": True,
+            "review_progress": True,
             "base_branches": base_branches,
         },
     }

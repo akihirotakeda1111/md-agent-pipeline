@@ -105,7 +105,7 @@ def report_skeleton(scenario: Scenario) -> dict[str, Any]:
         "preflight": {},
         "execute": {},
         "scenario_a": {
-            "name": "review-convergence-ready",
+            "name": "review-convergence-dual-terminal",
             "feedback": [],
             "review_runs": [],
             "head_history": [],

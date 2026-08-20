@@ -25,15 +25,20 @@ def test_review_workflow_uses_async_github_events() -> None:
         "pull_request_review",
         "pull_request_review_comment",
         "issue_comment",
+        "check_run",
+        "status",
     }
     assert triggers["pull_request_review"]["types"] == ["submitted", "edited"]
     assert triggers["pull_request_review_comment"]["types"] == ["created", "edited"]
     assert triggers["issue_comment"]["types"] == ["created", "edited"]
+    assert triggers["check_run"]["types"] == ["completed"]
+    assert triggers["status"] is None or triggers["status"] == {}
     assert "pull_request_target" not in triggers
     assert payload["permissions"] == {"contents": "read"}
-    assert payload["concurrency"]["group"] == (
-        "agent-review-${{ github.event.pull_request.number || github.event.issue.number }}"
-    )
+    group = payload["concurrency"]["group"]
+    assert "github.event.pull_request.number" in group
+    assert "github.event.check_run.head_sha" in group
+    assert "github.event.sha" in group
     assert payload["concurrency"]["cancel-in-progress"] is False
 
 
@@ -44,7 +49,11 @@ def test_review_workflow_skips_forks_and_does_not_poll() -> None:
     assert "pull_request_target" not in triggers
     prepare = payload["jobs"]["prepare"]
     assert "github.repository" in str(prepare["if"])
-    assert prepare["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert prepare["permissions"] == {
+        "contents": "read",
+        "pull-requests": "read",
+        "checks": "read",
+    }
     assert "CODEX_API_KEY" not in yaml.safe_dump(prepare)
     assert "REVIEW_CLASSIFIER_API_KEY" not in yaml.safe_dump(prepare)
 
@@ -59,6 +68,7 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
         "contents": "write",
         "pull-requests": "write",
         "issues": "write",
+        "checks": "read",
     }
     checkouts = [
         step
@@ -132,6 +142,8 @@ def test_coderabbit_yaml_keeps_incremental_review() -> None:
     assert isinstance(branches, list)
     assert "^main$" in branches
     assert "e2e/phase7-.*" in branches
+    assert reviews["review_progress"] is True
+    assert reviews["review_status"] is True
     touches = reviews["finishing_touches"]
     assert touches["autofix"]["enabled"] is False
     assert touches["docstrings"]["enabled"] is False

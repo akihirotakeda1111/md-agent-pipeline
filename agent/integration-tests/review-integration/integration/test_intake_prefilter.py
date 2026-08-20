@@ -6,6 +6,7 @@ from .common import (
     PR_NUMBER,
     assert_no_codex,
     assert_no_git_write,
+    coderabbit_completed,
     current_feedback,
     github_responses,
     request,

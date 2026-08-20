@@ -5,6 +5,7 @@ from .common import (
     github_responses,
     processed_record,
     request,
+    coderabbit_completed,
 )
 from .harness.adapters import require_status
 from .harness.fake_classifier import classification
@@ -16,7 +17,7 @@ def test_duplicate_event_does_not_repeat_repair(
 ):
     feedback = current_feedback(git_repo)
     services = service_factory(
-        github=github_responses(git_repo, [feedback]),
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
@@ -27,7 +28,7 @@ def test_duplicate_event_does_not_repeat_repair(
     second = phase7_driver.run_review(
         request(spec_path, git_repo, head_sha=git_repo.head), services
     )
-    assert second.status.upper() in {"READY_FOR_HUMAN", "SKIPPED"}
+    assert second.status.upper() == "IN_REVIEW"
     assert len(services.codex.invocations) == 1
     assert len(services.github.calls("list_review_feedback")) == 2
 
@@ -62,6 +63,7 @@ def test_edited_feedback_is_reevaluated_as_new_revision(
         git_repo,
         [edited],
         load_processed_reviews=[[processed_record(original)]],
+        **coderabbit_completed(git_repo),
     )
     services = service_factory(
         github=responses,
@@ -101,6 +103,7 @@ def test_all_current_feedback_processed_allows_readiness(
         git_repo,
         [feedback],
         load_processed_reviews=[[processed_record(feedback)]],
+        **coderabbit_completed(git_repo),
     )
     services = service_factory(github=responses)
     result = phase7_driver.run_review(request(spec_path, git_repo), services)

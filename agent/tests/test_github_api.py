@@ -163,3 +163,35 @@ def test_list_contents_returns_directory_entries() -> None:
 
     entries = _client(requester).list_contents("specs/tasks", ref="abc123")
     assert [item["name"] for item in entries] == ["demo.md", "nested"]
+
+
+def test_list_check_runs_for_ref_reads_check_runs_array() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        assert "/commits/abc123/check-runs" in url
+        return 200, {
+            "total_count": 1,
+            "check_runs": [{"id": 1, "head_sha": "abc123", "conclusion": "success"}],
+        }
+
+    runs = _client(requester).list_check_runs_for_ref("abc123")
+    assert runs[0]["conclusion"] == "success"
+
+
+def test_list_commit_statuses_and_pulls_for_commit() -> None:
+    urls: list[str] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        urls.append(url)
+        if url.endswith("/statuses") or "/statuses?" in url:
+            return 200, [{"state": "success", "context": "CodeRabbit"}]
+        return 200, [{"number": 7, "state": "open"}]
+
+    client = _client(requester)
+    assert client.list_commit_statuses_for_ref("abc123")[0]["context"] == "CodeRabbit"
+    assert client.list_pulls_for_commit("abc123")[0]["number"] == 7
+    assert any("/commits/abc123/statuses" in url for url in urls)
+    assert any("/commits/abc123/pulls" in url for url in urls)
