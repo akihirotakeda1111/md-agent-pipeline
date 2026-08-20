@@ -9,6 +9,8 @@ Missing or unknown descriptions are CODERABBIT_AMBIGUOUS and fail-closed.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 KIND_COMPLETED = "CODERABBIT_COMPLETED"
@@ -183,3 +185,29 @@ def _kind_from_status_description(description: str) -> str | None:
     if STATUS_DESC_COMPLETED in text:
         return KIND_COMPLETED
     return None
+
+
+OBSERVED_CASES_PATH = (
+    Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "coderabbit_terminal_cases.json"
+)
+
+
+def load_observed_cases() -> dict[str, Any]:
+    return json.loads(OBSERVED_CASES_PATH.read_text(encoding="utf-8"))
+
+
+def bind_observed_case(
+    case: dict[str, Any], *, current: str = "abc", old: str = "old"
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    mapping = {"current": current, "old": old}
+
+    def bind_item(item: dict[str, Any], sha_key: str) -> dict[str, Any]:
+        bound = dict(item)
+        token = bound.get(sha_key)
+        if token in mapping:
+            bound[sha_key] = mapping[token]
+        return bound
+
+    checks = [bind_item(item, "head_sha") for item in case.get("check_runs") or []]
+    statuses = [bind_item(item, "sha") for item in case.get("statuses") or []]
+    return checks, statuses, current

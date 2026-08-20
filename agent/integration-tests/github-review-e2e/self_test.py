@@ -26,10 +26,9 @@ from harness.assertions import (
     terminal_state,
 )
 from harness.coderabbit_terminal import (
-    KIND_AMBIGUOUS,
-    KIND_COMPLETED,
-    KIND_NONE,
     KIND_SKIPPED,
+    bind_observed_case,
+    load_observed_cases,
     resolve_coderabbit_terminal,
 )
 from harness.git import GitRepository
@@ -162,108 +161,39 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(ProductionBug):
             assert_review_workflow_contract(workflow)
 
-    def test_harness_terminal_mapper_ignores_old_head_and_maps_skipped(self) -> None:
-        completed = resolve_coderabbit_terminal(
-            [
-                {
-                    "head_sha": "abc",
-                    "status": "completed",
-                    "conclusion": "success",
-                    "completed_at": "2026-08-20T00:00:00Z",
-                    "app": {"slug": "coderabbitai"},
-                }
-            ],
-            [],
-            head_sha="abc",
-            actor="coderabbitai[bot]",
-            check_app_slug="coderabbitai",
-            status_context="CodeRabbit",
-        )
-        skipped = resolve_coderabbit_terminal(
-            [
-                {
-                    "head_sha": "abc",
-                    "status": "completed",
-                    "conclusion": "skipped",
-                    "completed_at": "2026-08-20T00:00:00Z",
-                    "app": {"slug": "coderabbitai"},
-                }
-            ],
-            [],
-            head_sha="abc",
-            actor="coderabbitai[bot]",
-            check_app_slug="coderabbitai",
-            status_context="CodeRabbit",
-        )
-        stale = resolve_coderabbit_terminal(
-            [
-                {
-                    "head_sha": "old",
-                    "status": "completed",
-                    "conclusion": "success",
-                    "app": {"slug": "coderabbitai"},
-                }
-            ],
-            [],
-            head_sha="new",
-            actor="coderabbitai[bot]",
-            check_app_slug="coderabbitai",
-            status_context="CodeRabbit",
-        )
-        self.assertEqual(completed["kind"], KIND_COMPLETED)
-        self.assertEqual(skipped["kind"], KIND_SKIPPED)
-        self.assertEqual(stale["kind"], KIND_NONE)
-        history = resolve_coderabbit_terminal(
-            [],
-            [
-                {
-                    "sha": "abc",
-                    "state": "success",
-                    "context": "CodeRabbit",
-                    "description": "Review skipped",
-                    "updated_at": "2026-08-20T00:01:00Z",
-                    "creator": {"login": "coderabbitai[bot]"},
-                },
-                {
-                    "sha": "abc",
-                    "state": "pending",
-                    "context": "CodeRabbit",
-                    "description": "Review in progress",
-                    "updated_at": "2026-08-20T00:02:00Z",
-                    "creator": {"login": "coderabbitai[bot]"},
-                },
-                {
-                    "sha": "abc",
-                    "state": "success",
-                    "context": "CodeRabbit",
-                    "description": "Review completed",
-                    "updated_at": "2026-08-20T00:03:00Z",
-                    "creator": {"login": "coderabbitai[bot]"},
-                },
-            ],
-            head_sha="abc",
-            actor="coderabbitai[bot]",
-            check_app_slug="coderabbitai",
-            status_context="CodeRabbit",
-        )
-        self.assertEqual(history["kind"], KIND_COMPLETED)
-        self.assertEqual(history["description"], "Review completed")
-        success_only = resolve_coderabbit_terminal(
-            [],
-            [
-                {
-                    "state": "success",
-                    "context": "CodeRabbit",
-                    "updated_at": "2026-08-20T00:03:00Z",
-                    "creator": {"login": "coderabbitai[bot]"},
-                }
-            ],
-            head_sha="abc",
-            actor="coderabbitai[bot]",
-            check_app_slug="coderabbitai",
-            status_context="CodeRabbit",
-        )
-        self.assertEqual(success_only["kind"], KIND_AMBIGUOUS)
+    def test_harness_mapper_matches_shared_observed_cases(self) -> None:
+        payload = load_observed_cases()
+        identity = payload["identity"]
+        for case in payload["cases"]:
+            with self.subTest(case["id"]):
+                checks, statuses, head = bind_observed_case(case)
+                first = resolve_coderabbit_terminal(
+                    checks,
+                    statuses,
+                    head_sha=head,
+                    actor=identity["actor"],
+                    check_app_slug=identity["check_app_slug"],
+                    status_context=identity["status_context"],
+                )
+                second = resolve_coderabbit_terminal(
+                    checks,
+                    statuses,
+                    head_sha=head,
+                    actor=identity["actor"],
+                    check_app_slug=identity["check_app_slug"],
+                    status_context=identity["status_context"],
+                )
+                expected = case["expected"]
+                self.assertEqual(first["kind"], expected["kind"])
+                self.assertEqual(first.get("source"), expected.get("source", first.get("source")))
+                self.assertEqual(
+                    first.get("description"),
+                    expected.get("description", first.get("description")),
+                )
+                self.assertEqual(first, second)
+                if expected["kind"] == KIND_SKIPPED:
+                    self.assertNotEqual(expected.get("outcome"), "READY_FOR_HUMAN")
+                    self.assertEqual(expected.get("outcome"), "ESCALATED")
 
     def test_run_pr_review_and_scope_assertions(self) -> None:
         execute_workflow = WorkflowInfo(

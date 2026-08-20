@@ -433,6 +433,30 @@ def _run(
     )
 
 
+def _observed_loop_cases() -> list[dict]:
+    path = Path(__file__).resolve().parent / "fixtures" / "coderabbit_terminal_cases.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [case for case in payload["cases"] if "outcome" in case["expected"]]
+
+
+def _apply_observed_terminal(
+    fake: FakeGithub, case: dict, *, current: str, old: str = "0" * 40
+) -> None:
+    mapping = {"current": current, "old": old}
+    for item in case.get("check_runs") or []:
+        bound = dict(item)
+        token = bound.get("head_sha")
+        if token in mapping:
+            bound["head_sha"] = mapping[token]
+        fake.check_runs.append(bound)
+    for item in case.get("statuses") or []:
+        bound = dict(item)
+        token = bound.get("sha")
+        if token in mapping:
+            bound["sha"] = mapping[token]
+        fake.commit_statuses.append(bound)
+
+
 def _assert_exclusive_issue_label(fake: FakeGithub, expected: str) -> None:
     statuses = {"agent:review", "agent:ready", "agent:escalated", "agent:failed"}
     assert expected in fake.issue_labels
@@ -791,27 +815,6 @@ def test_no_terminal_and_no_feedback_stays_in_review(tmp_path: Path) -> None:
         assert parsed.head_sha == ""
 
 
-def test_old_head_completed_terminal_is_ignored(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    spec = _spec(repo)
-    fake = FakeGithub(_pull(repo, spec))
-    fake.add_check_run(head_sha="0" * 40)
-    result = _run(repo, fake)
-    assert result.outcome == "IN_REVIEW"
-    _assert_exclusive_issue_label(fake, "agent:review")
-
-
-def test_commit_status_completed_allows_ready(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    spec = _spec(repo)
-    fake = FakeGithub(_pull(repo, spec))
-    fake.add_commit_status(sha=head_sha(repo), state="success")
-    result = _run(repo, fake)
-    assert result.outcome == "READY_FOR_HUMAN"
-    _assert_exclusive_issue_label(fake, "agent:ready")
-    _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
-
-
 def test_commit_status_ambiguous_success_escalates(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     spec = _spec(repo)
@@ -820,52 +823,6 @@ def test_commit_status_ambiguous_success_escalates(tmp_path: Path) -> None:
     result = _run(repo, fake)
     assert result.outcome == "ESCALATED"
     assert result.code == "CODERABBIT_AMBIGUOUS"
-    _assert_exclusive_issue_label(fake, "agent:escalated")
-
-
-def test_commit_status_history_latest_completed_allows_ready(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    spec = _spec(repo)
-    fake = FakeGithub(_pull(repo, spec))
-    sha = head_sha(repo)
-    fake.add_commit_status(
-        sha=sha,
-        state="pending",
-        description="Review in progress",
-        updated_at="2026-08-20T00:00:00Z",
-    )
-    fake.add_commit_status(
-        sha=sha,
-        state="success",
-        description="Review skipped",
-        updated_at="2026-08-20T00:01:00Z",
-    )
-    fake.add_commit_status(
-        sha=sha,
-        state="pending",
-        description="Review in progress",
-        updated_at="2026-08-20T00:02:00Z",
-    )
-    fake.add_commit_status(
-        sha=sha,
-        state="success",
-        description="Review completed",
-        updated_at="2026-08-20T00:03:00Z",
-    )
-    result = _run(repo, fake)
-    assert result.outcome == "READY_FOR_HUMAN"
-    _assert_exclusive_issue_label(fake, "agent:ready")
-    _assert_single_durable_tracking_comment(fake, spec=spec, head=sha)
-
-
-def test_commit_status_skipped_escalates(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    spec = _spec(repo)
-    fake = FakeGithub(_pull(repo, spec))
-    fake.add_commit_status(sha=head_sha(repo), state="success", description="Review skipped")
-    result = _run(repo, fake)
-    assert result.outcome == "ESCALATED"
-    assert result.code == "CODERABBIT_SKIPPED"
     _assert_exclusive_issue_label(fake, "agent:escalated")
 
 
@@ -884,6 +841,35 @@ def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:
     assert result.outcome == "IN_REVIEW"
     assert "in progress" in result.message
     _assert_exclusive_issue_label(fake, "agent:review")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _observed_loop_cases(),
+    ids=lambda case: str(case["id"]),
+)
+def test_observed_terminal_loop_outcome_is_stable_on_rerun(tmp_path: Path, case: dict) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    current = head_sha(repo)
+    _apply_observed_terminal(fake, case, current=current)
+    expected = str(case["expected"]["outcome"])
+    first = _run(repo, fake)
+    second = _run(repo, fake)
+    assert first.outcome == expected
+    assert second.outcome == first.outcome
+    if case["expected"]["kind"] == "CODERABBIT_SKIPPED":
+        assert first.outcome != "READY_FOR_HUMAN"
+        assert first.code == "CODERABBIT_SKIPPED"
+        assert len(_escalation_notices(fake)) == 1
+    if expected == "READY_FOR_HUMAN":
+        _assert_exclusive_issue_label(fake, "agent:ready")
+        _assert_single_durable_tracking_comment(fake, spec=spec, head=current)
+    elif expected == "IN_REVIEW":
+        _assert_exclusive_issue_label(fake, "agent:review")
+    elif expected == "ESCALATED":
+        _assert_exclusive_issue_label(fake, "agent:escalated")
 
 
 def test_prepare_resolves_check_run_without_pull_number(tmp_path: Path) -> None:

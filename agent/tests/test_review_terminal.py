@@ -111,24 +111,6 @@ def test_other_app_checks_are_ignored() -> None:
     assert terminal.kind is CodeRabbitTerminalKind.NONE
 
 
-def test_old_sha_check_is_ignored() -> None:
-    cfg = _cfg()
-    terminal = resolve_coderabbit_terminal(
-        [
-            {
-                "head_sha": "old",
-                "status": "completed",
-                "conclusion": "success",
-                "app": {"slug": cfg.check_app_slug},
-            }
-        ],
-        [],
-        head_sha="new",
-        cfg=cfg,
-    )
-    assert terminal.kind is CodeRabbitTerminalKind.NONE
-
-
 def test_commit_status_review_completed_is_completed() -> None:
     cfg = _cfg()
     terminal = resolve_coderabbit_terminal(
@@ -189,26 +171,6 @@ def test_commit_status_success_with_unknown_description_is_ambiguous() -> None:
     )
     assert terminal.kind is CodeRabbitTerminalKind.AMBIGUOUS
     assert terminal.description == "CodeRabbit finished"
-
-
-def test_commit_status_review_skipped_is_skipped() -> None:
-    cfg = _cfg()
-    terminal = resolve_coderabbit_terminal(
-        [],
-        [
-            {
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review skipped",
-                "updated_at": "2026-08-20T00:00:00Z",
-                "creator": {"login": cfg.actor},
-            }
-        ],
-        head_sha="abc",
-        cfg=cfg,
-    )
-    assert terminal.kind is CodeRabbitTerminalKind.SKIPPED
-    assert terminal.escalation_code() == "CODERABBIT_SKIPPED"
 
 
 def test_older_pending_does_not_override_later_completed() -> None:
@@ -289,102 +251,6 @@ def test_latest_completed_item_wins() -> None:
     assert terminal.kind is CodeRabbitTerminalKind.COMPLETED
 
 
-def test_pr19_status_history_latest_completed_ignores_past_skipped() -> None:
-    cfg = _cfg()
-    sha = "abc"
-    terminal = resolve_coderabbit_terminal(
-        [],
-        [
-            {
-                "sha": sha,
-                "state": "pending",
-                "context": "CodeRabbit",
-                "description": "Review in progress",
-                "updated_at": "2026-08-20T00:00:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "sha": sha,
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review skipped",
-                "updated_at": "2026-08-20T00:01:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "sha": sha,
-                "state": "pending",
-                "context": "CodeRabbit",
-                "description": "Review in progress",
-                "updated_at": "2026-08-20T00:02:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "sha": sha,
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review completed",
-                "updated_at": "2026-08-20T00:03:00Z",
-                "creator": {"login": cfg.actor},
-            },
-        ],
-        head_sha=sha,
-        cfg=cfg,
-    )
-    assert terminal.kind is CodeRabbitTerminalKind.COMPLETED
-    assert terminal.description == "Review completed"
-
-
-def test_pr19_github_newest_first_order_is_still_completed() -> None:
-    cfg = _cfg()
-    sha = "abc"
-    terminal = resolve_coderabbit_terminal(
-        [],
-        [
-            {
-                "id": 4,
-                "sha": sha,
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review completed",
-                "updated_at": "2026-08-20T00:03:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "id": 3,
-                "sha": sha,
-                "state": "pending",
-                "context": "CodeRabbit",
-                "description": "Review in progress",
-                "updated_at": "2026-08-20T00:02:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "id": 2,
-                "sha": sha,
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review skipped",
-                "updated_at": "2026-08-20T00:01:00Z",
-                "creator": {"login": cfg.actor},
-            },
-            {
-                "id": 1,
-                "sha": sha,
-                "state": "pending",
-                "context": "CodeRabbit",
-                "description": "Review in progress",
-                "updated_at": "2026-08-20T00:00:00Z",
-                "creator": {"login": cfg.actor},
-            },
-        ],
-        head_sha=sha,
-        cfg=cfg,
-    )
-    assert terminal.kind is CodeRabbitTerminalKind.COMPLETED
-    assert terminal.description == "Review completed"
-
-
 def test_latest_review_skipped_is_skipped_not_completed() -> None:
     cfg = _cfg()
     terminal = resolve_coderabbit_terminal(
@@ -428,26 +294,6 @@ def test_review_in_progress_description_is_in_progress() -> None:
         cfg=cfg,
     )
     assert terminal.kind is CodeRabbitTerminalKind.IN_PROGRESS
-
-
-def test_status_on_other_sha_is_ignored() -> None:
-    cfg = _cfg()
-    terminal = resolve_coderabbit_terminal(
-        [],
-        [
-            {
-                "sha": "old",
-                "state": "success",
-                "context": "CodeRabbit",
-                "description": "Review completed",
-                "updated_at": "2026-08-20T00:03:00Z",
-                "creator": {"login": cfg.actor},
-            }
-        ],
-        head_sha="new",
-        cfg=cfg,
-    )
-    assert terminal.kind is CodeRabbitTerminalKind.NONE
 
 
 def test_commit_status_failure_is_failed() -> None:
