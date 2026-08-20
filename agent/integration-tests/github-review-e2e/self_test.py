@@ -56,6 +56,7 @@ from harness.github import (
     parse_prepare_gate_from_log,
     prepare_binds_to_target_pr,
     raise_if_prepare_fault,
+    log_line_message,
 )
 from harness.models import (
     E2EBug,
@@ -736,11 +737,11 @@ class HarnessTests(unittest.TestCase):
         pretty = json.dumps(payload, ensure_ascii=False, indent=2)
         compact = json.dumps(payload, ensure_ascii=False)
         pretty_log = "\n".join(
-            f"Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.{index:07d}Z\t{line}"
+            f"Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.{index:07d}Z {line}"
             for index, line in enumerate(pretty.splitlines())
         )
         compact_log = (
-            "Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000000Z\t"
+            "Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000000Z "
             + compact
         )
         pretty_gate = parse_prepare_gate_from_log(pretty_log)
@@ -750,7 +751,11 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(pretty_gate["head_sha"], head)
         self.assertEqual(pretty_gate["reason"], "ok")
         self.assertEqual(pretty_gate, compact_gate)
-        self.assertIsNone(parse_prepare_gate_from_log("Prepare review\tGate\tts\tnot json"))
+        self.assertIsNone(parse_prepare_gate_from_log("Prepare review\tGate\t2026-08-20T10:00:00Z not json"))
+        continuation = log_line_message(
+            'Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000001Z   "ok": true,'
+        )
+        self.assertEqual(continuation, '  "ok": true,')
 
     def test_repair_head_and_old_head_terminal_are_separated(self) -> None:
         old_head = "a" * 40
