@@ -266,7 +266,7 @@ def _run_review(
     batch = candidates[:cap] if cap is not None and cap >= 0 else candidates
     if not batch:
         updated = with_processed(track, tuple(skipped), increment=False)
-        persist_review_track(client, pull_number, track_id, updated)
+        track_id = persist_review_track(client, pull_number, track_id, updated)
         return _convergence_result(
             client,
             spec,
@@ -346,7 +346,7 @@ def _run_review(
     ]
     if not accepted:
         updated = with_processed(track, identities, increment=False)
-        persist_review_track(client, pull_number, track_id, updated)
+        track_id = persist_review_track(client, pull_number, track_id, updated)
         leftover = candidates[len(batch) :]
         if leftover:
             return _in_review(
@@ -605,6 +605,7 @@ def load_review_track(
 def persist_review_track(
     client: GitHubClient, pull_number: int, comment_id: int | None, track: ReviewTrack
 ) -> int:
+    """Create the tracking comment once; later calls must pass the returned id."""
     body = render_review_track(track)
     if comment_id is None:
         created = client.create_issue_comment(pull_number, body)

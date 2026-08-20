@@ -25,6 +25,7 @@ from agent.review_loop import run_review
 from agent.review_policy import decide_review_policy
 from agent.review_prepare import prepare_review
 from agent.review_track import (
+    REVIEW_STATE_START,
     empty_review_track,
     parse_review_track,
     render_review_track,
@@ -402,6 +403,14 @@ def _run(
         executor=executor,
         env={"CODEX_API_KEY": "codex-secret", "REVIEW_CLASSIFIER_API_KEY": "review-secret"},
     )
+
+
+def _tracking_comments(fake: FakeGithub) -> list[dict]:
+    return [
+        comment
+        for comment in fake.issue_comments
+        if REVIEW_STATE_START in str(comment.get("body") or "")
+    ]
 
 
 def test_non_coderabbit_actor_is_rejected() -> None:
@@ -834,6 +843,61 @@ def test_non_actionable_ready_for_human(tmp_path: Path) -> None:
     result, count = _class_run(tmp_path, ReviewClassification.NON_ACTIONABLE)
     assert result.outcome == "READY_FOR_HUMAN"
     assert count == 0
+
+
+def _assert_single_durable_tracking_comment(fake: FakeGithub, *, spec, head: str, previous_id=None):
+    tracking = _tracking_comments(fake)
+    assert len(tracking) == 1
+    comment_id = tracking[0]["id"]
+    if previous_id is not None:
+        assert comment_id == previous_id
+    parsed = parse_review_track(tracking[0]["body"])
+    assert parsed is not None
+    assert parsed.matches_work_unit(spec)
+    assert parsed.head_sha == head
+    return comment_id
+
+
+def test_no_feedback_ready_keeps_one_tracking_comment_across_reruns(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo))
+    first = _run(repo, fake)
+    assert first.outcome == "READY_FOR_HUMAN"
+    assert first.code != "UNSAFE_REVIEW_TRACK"
+    track_id = _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
+    second = _run(repo, fake)
+    assert second.outcome == "READY_FOR_HUMAN"
+    assert second.code != "UNSAFE_REVIEW_TRACK"
+    _assert_single_durable_tracking_comment(
+        fake, spec=spec, head=head_sha(repo), previous_id=track_id
+    )
+
+
+def test_non_actionable_ready_keeps_one_tracking_comment_across_reruns(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+
+    def classifier(item, spec):
+        return _result(ReviewClassification.NON_ACTIONABLE)
+
+    first = _run(repo, fake, classifier=classifier)
+    assert first.outcome == "READY_FOR_HUMAN"
+    assert first.code != "UNSAFE_REVIEW_TRACK"
+    track_id = _assert_single_durable_tracking_comment(fake, spec=spec, head=head_sha(repo))
+    parsed = parse_review_track(_tracking_comments(fake)[0]["body"])
+    assert parsed is not None
+    assert parsed.processed
+    second = _run(repo, fake, classifier=classifier)
+    assert second.outcome == "READY_FOR_HUMAN"
+    assert second.code != "UNSAFE_REVIEW_TRACK"
+    _assert_single_durable_tracking_comment(
+        fake, spec=spec, head=head_sha(repo), previous_id=track_id
+    )
 
 
 def test_out_of_scope_escalates(tmp_path: Path) -> None:
