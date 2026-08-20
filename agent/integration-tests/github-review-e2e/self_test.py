@@ -4,6 +4,7 @@ import inspect
 import json
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -23,9 +24,14 @@ from harness.assertions import (
     assert_review_run,
     assert_tracking_current_head,
     production_terminal_outcome,
+    review_run_completed,
+    run_matches_current_head,
     terminal_state,
 )
 from harness.coderabbit_terminal import (
+    KIND_COMPLETED,
+    KIND_IN_PROGRESS,
+    KIND_NONE,
     KIND_SKIPPED,
     bind_observed_case,
     load_observed_cases,
@@ -43,6 +49,7 @@ from harness.github import (
     CANDIDATE_STALE_HEAD,
     candidate_evidence_row,
     choose_unseen_review_run,
+    classify_scenario_a_timeout,
     classify_terminal_wake_candidate,
     completed_review_run_for_terminal,
     new_terminal_wake_runs,
@@ -51,6 +58,7 @@ from harness.github import (
 )
 from harness.models import (
     EnvironmentBlocker,
+    ExternalServiceBlocker,
     ProductionBug,
     PullRequestEvidence,
     RunEvidence,
@@ -381,6 +389,55 @@ class HarnessTests(unittest.TestCase):
             production_terminal_outcome(escalated_pr, escalated_run, current_head="b" * 40),
             "ESCALATED",
         )
+        stale_head_run = RunEvidence(
+            22,
+            1,
+            "https://example.invalid/runs/22",
+            "d" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"),
+            "a" * 40,
+        )
+        current_pr = PullRequestEvidence(
+            4,
+            "url",
+            self.scenario.target_branch,
+            self.scenario.base_branch,
+            "b" * 40,
+            "",
+            ("agent:ready",),
+            "open",
+            False,
+            None,
+            None,
+        )
+        self.assertFalse(run_matches_current_head(stale_head_run, "b" * 40))
+        self.assertIsNone(
+            production_terminal_outcome(current_pr, stale_head_run, current_head="b" * 40)
+        )
+        current_run = RunEvidence(
+            23,
+            1,
+            "https://example.invalid/runs/23",
+            "d" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"),
+            "b" * 40,
+        )
+        self.assertEqual(
+            production_terminal_outcome(current_pr, current_run, current_head="b" * 40),
+            "READY_FOR_HUMAN",
+        )
         assert_linear_head_change(
             {
                 "status": "ahead",
@@ -476,6 +533,10 @@ class HarnessTests(unittest.TestCase):
         source = inspect.getsource(GitHub)
         self.assertIn("time.monotonic() + timeout_seconds", source)
         self.assertNotIn("while True", source)
+        runner_source = inspect.getsource(runner)
+        self.assertNotIn("while True", runner_source)
+        self.assertIn("convergence_deadline", runner_source)
+        self.assertIn("KeyboardInterrupt", inspect.getsource(runner.classify_unhandled))
 
     def test_scenario_a_poll_uses_production_terminal_not_coderabbit_mapper(self) -> None:
         wait_source = inspect.getsource(GitHub.wait_for_scenario_a_signal)
@@ -485,7 +546,7 @@ class HarnessTests(unittest.TestCase):
         runner_source = inspect.getsource(runner)
         self.assertIn("production_terminal_outcome", runner_source)
         self.assertNotIn("KIND_COMPLETED", runner_source)
-        self.assertNotIn("KIND_SKIPPED", runner_source)
+        self.assertIn("KIND_SKIPPED", runner_source)
 
     def test_review_run_correlation_uses_prepare_not_run_head_or_title(self) -> None:
         wait_source = inspect.getsource(GitHub.wait_for_scenario_a_signal)
@@ -913,6 +974,185 @@ class HarnessTests(unittest.TestCase):
         timeout_source = inspect.getsource(GitHub.scenario_a_timeout_evidence)
         self.assertIn("candidate_evidence_row", timeout_source)
         self.assertIn("check_run_status_history", timeout_source)
+
+    def test_remaining_timeout_expires_without_keyboard_interrupt(self) -> None:
+        self.assertEqual(runner.remaining_timeout(time.monotonic() - 1, 1800), 0)
+        with self.assertRaises(KeyboardInterrupt):
+            runner.classify_unhandled(KeyboardInterrupt())
+
+    def test_scenario_a_timeout_classifies_transport_in_review_and_no_activity(self) -> None:
+        current = "b" * 40
+        in_review = PullRequestEvidence(
+            19,
+            "url",
+            self.scenario.target_branch,
+            self.scenario.base_branch,
+            current,
+            "",
+            ("agent:review",),
+            "open",
+            False,
+            None,
+            None,
+        )
+        ready = PullRequestEvidence(
+            19,
+            "url",
+            self.scenario.target_branch,
+            self.scenario.base_branch,
+            current,
+            "",
+            ("agent:ready",),
+            "open",
+            False,
+            None,
+            None,
+        )
+        success_run = RunEvidence(
+            70,
+            1,
+            "https://example.invalid/runs/70",
+            current,
+            self.scenario.target_branch,
+            "status",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED"),
+        )
+        self.assertTrue(review_run_completed(success_run))
+        no_activity = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=None,
+            coderabbit_terminal={"kind": KIND_NONE},
+            candidate_runs=[],
+            feedback_count=0,
+        )
+        self.assertIsInstance(no_activity, ExternalServiceBlocker)
+        self.assertEqual(no_activity.evidence["failure_kind"], "NO_CODERABBIT_ACTIVITY")
+        transport = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=None,
+            coderabbit_terminal={"kind": KIND_COMPLETED, "description": "Review completed"},
+            candidate_runs=[],
+            feedback_count=0,
+        )
+        self.assertIsInstance(transport, ProductionBug)
+        self.assertEqual(transport.evidence["failure_kind"], "TRANSPORT_FAILURE")
+        skipped_transport = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=None,
+            coderabbit_terminal={"kind": KIND_SKIPPED, "description": "Review skipped"},
+            candidate_runs=[],
+            feedback_count=0,
+        )
+        self.assertEqual(skipped_transport.evidence["failure_kind"], "TRANSPORT_FAILURE")
+        in_review_success = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=success_run,
+            coderabbit_terminal={"kind": KIND_COMPLETED},
+            candidate_runs=[{"classification": CANDIDATE_REVIEW_EXECUTED, "id": 70}],
+            feedback_count=0,
+            unprocessed_feedback=False,
+        )
+        self.assertIsInstance(in_review_success, ProductionBug)
+        self.assertEqual(in_review_success.evidence["failure_kind"], "SUCCESS_STILL_IN_REVIEW")
+        success_in_progress = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=success_run,
+            coderabbit_terminal={"kind": KIND_IN_PROGRESS},
+            candidate_runs=[{"classification": CANDIDATE_REVIEW_EXECUTED, "id": 70}],
+            feedback_count=0,
+            unprocessed_feedback=False,
+        )
+        self.assertIsInstance(success_in_progress, ExternalServiceBlocker)
+        self.assertEqual(success_in_progress.evidence["failure_kind"], "CODERABBIT_IN_PROGRESS")
+        success_none = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=success_run,
+            coderabbit_terminal={"kind": KIND_NONE},
+            candidate_runs=[{"classification": CANDIDATE_REVIEW_EXECUTED, "id": 70}],
+            feedback_count=0,
+            unprocessed_feedback=False,
+        )
+        self.assertIsInstance(success_none, ExternalServiceBlocker)
+        self.assertEqual(success_none.evidence["failure_kind"], "EVIDENCE_INCOMPLETE")
+        success_with_feedback = classify_scenario_a_timeout(
+            pr=in_review,
+            current_head=current,
+            latest_review_run=success_run,
+            coderabbit_terminal={"kind": KIND_COMPLETED},
+            candidate_runs=[{"classification": CANDIDATE_REVIEW_EXECUTED, "id": 70}],
+            feedback_count=1,
+            unprocessed_feedback=True,
+        )
+        self.assertIsInstance(success_with_feedback, ExternalServiceBlocker)
+        self.assertEqual(success_with_feedback.evidence["failure_kind"], "CONVERGENCE_TIMEOUT")
+        stale_ready_run = RunEvidence(
+            72,
+            1,
+            "https://example.invalid/runs/72",
+            "d" * 40,
+            self.scenario.target_branch,
+            "status",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"),
+            "a" * 40,
+        )
+        stale_label_timeout = classify_scenario_a_timeout(
+            pr=ready,
+            current_head=current,
+            latest_review_run=stale_ready_run,
+            coderabbit_terminal={"kind": KIND_IN_PROGRESS},
+            candidate_runs=[],
+            feedback_count=0,
+            unprocessed_feedback=False,
+        )
+        self.assertIsInstance(stale_label_timeout, ExternalServiceBlocker)
+        self.assertNotEqual(
+            stale_label_timeout.evidence.get("failure_kind"),
+            "UNMATCHED_PRODUCTION_TERMINAL",
+        )
+        ready_complete = RunEvidence(
+            71,
+            1,
+            "https://example.invalid/runs/71",
+            current,
+            self.scenario.target_branch,
+            "status",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"),
+        )
+        skipped_as_ready = classify_scenario_a_timeout(
+            pr=ready,
+            current_head=current,
+            latest_review_run=ready_complete,
+            coderabbit_terminal={"kind": KIND_SKIPPED, "description": "Review skipped"},
+            candidate_runs=[{"classification": CANDIDATE_REVIEW_EXECUTED, "id": 71}],
+            feedback_count=0,
+            unprocessed_feedback=False,
+        )
+        self.assertEqual(skipped_as_ready.evidence["failure_kind"], "SKIPPED_TREATED_AS_COMPLETED")
+        self.assertIsNone(
+            production_terminal_outcome(ready, success_run, current_head=current)
+        )
+        self.assertEqual(
+            production_terminal_outcome(ready, ready_complete, current_head=current),
+            "READY_FOR_HUMAN",
+        )
 
 
 if __name__ == "__main__":

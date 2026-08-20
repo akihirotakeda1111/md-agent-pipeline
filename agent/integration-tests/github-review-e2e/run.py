@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,13 @@ from harness.assertions import (
     assert_review_run,
     assert_tracking_current_head,
     production_terminal_outcome,
+    review_run_completed,
+    run_matches_current_head,
     terminal_state,
 )
+from harness.coderabbit_terminal import KIND_SKIPPED
 from harness.git import GitRepository
-from harness.github import GitHub
+from harness.github import GitHub, classify_scenario_a_timeout
 from harness.models import (
     ClassifiedFailure,
     E2EBug,
@@ -158,6 +162,7 @@ def run_dict(run) -> dict[str, Any]:
         "conclusion": run.conclusion,
         "jobs": run.jobs,
         "events": list(run.events),
+        "bound_head_sha": getattr(run, "bound_head_sha", ""),
     }
 
 
@@ -186,11 +191,63 @@ def wait_for_one_pr(github: GitHub, scenario: Scenario, timeout_seconds: int):
     raise ExternalServiceBlocker("Production execute completed but E2E PR was not observed")
 
 
+def has_unprocessed_current_head_feedback(report: dict[str, Any], current_head: str) -> bool:
+    expected = current_head.strip().lower()
+    for item in report.get("scenario_a", {}).get("feedback") or []:
+        sha = str(item.get("commit_sha") or "").strip().lower()
+        if not sha or sha == expected:
+            return True
+    return False
+
+
 def remaining_timeout(deadline: float, configured: int) -> int:
     remaining = int(deadline - time.monotonic())
     if remaining <= 0:
-        raise ExternalServiceBlocker("Phase 7 convergence deadline expired")
+        return 0
     return min(configured, remaining)
+
+
+def scenario_a_timeout_failure(
+    github: GitHub,
+    *,
+    pr_number: int,
+    current_head: str,
+    latest_review_run,
+    coderabbit_terminal: dict[str, str] | None,
+    report: dict[str, Any],
+    actor: str,
+    check_app_slug: str,
+    status_context: str,
+    workflow_id: int,
+    baseline_ids: set[int],
+    wait_evidence: dict[str, Any] | None = None,
+):
+    evidence = wait_evidence
+    if evidence is None or "candidate_runs" not in evidence:
+        collected = github.collect_scenario_a_wait_evidence(
+            pr_number=pr_number,
+            head_sha=current_head,
+            actor=actor,
+            check_app_slug=check_app_slug,
+            status_context=status_context,
+            workflow_id=workflow_id,
+            baseline_ids=baseline_ids,
+        )
+        evidence = {**collected, **(wait_evidence or {})}
+    pr = github.pr_evidence(pr_number)
+    terminal = coderabbit_terminal or evidence.get("coderabbit_terminal")
+    if not isinstance(terminal, dict):
+        terminal = None
+    raise classify_scenario_a_timeout(
+        pr=pr,
+        current_head=current_head,
+        latest_review_run=latest_review_run,
+        coderabbit_terminal=terminal,
+        candidate_runs=list(evidence.get("candidate_runs") or []),
+        feedback_count=len(report["scenario_a"].get("feedback") or []),
+        unprocessed_feedback=has_unprocessed_current_head_feedback(report, current_head),
+        wait_evidence=evidence,
+    )
 
 
 def ingest_review_run(
@@ -209,6 +266,10 @@ def ingest_review_run(
     seen_review_runs.add(run_id)
     completed = github.wait_attempt(run_id, timeout_seconds)
     review_run = github.run_evidence(completed)
+    gate = github.attempt_prepare_gate(review_run.id, review_run.attempt)
+    bound = str((gate or {}).get("head_sha") or "")
+    if bound:
+        review_run = replace(review_run, bound_head_sha=bound)
     assert_review_run(
         review_run,
         configured_actor=configured_actor,
@@ -221,6 +282,8 @@ def ingest_review_run(
 
 
 def classify_unhandled(exc: BaseException) -> ClassifiedFailure:
+    if isinstance(exc, KeyboardInterrupt):
+        raise exc
     if isinstance(exc, ClassifiedFailure):
         return exc
     if isinstance(exc, AssertionError):
@@ -427,21 +490,43 @@ def main() -> int:
             scenario_a_state: str | None = None
             scenario_a_terminal: dict[str, str] | None = None
             latest_review_run = None
-            while True:
-                signal = github.wait_for_scenario_a_signal(
-                    pr_number=pr.number,
-                    head_sha=current_head,
-                    actor=configured_actor,
-                    check_app_slug=configured_check_app_slug,
-                    status_context=configured_status_context,
-                    known_ids=known_feedback,
-                    workflow_id=review_workflow.id,
-                    baseline_ids=review_baseline,
-                    seen_ids=seen_review_runs,
-                    timeout_seconds=remaining_timeout(
-                        convergence_deadline, args.review_timeout_seconds
-                    ),
+            timeout_kwargs = {
+                "actor": configured_actor,
+                "check_app_slug": configured_check_app_slug,
+                "status_context": configured_status_context,
+                "workflow_id": review_workflow.id,
+                "baseline_ids": review_baseline,
+            }
+            while time.monotonic() < convergence_deadline:
+                timeout_seconds = remaining_timeout(
+                    convergence_deadline, args.review_timeout_seconds
                 )
+                if timeout_seconds <= 0:
+                    break
+                try:
+                    signal = github.wait_for_scenario_a_signal(
+                        pr_number=pr.number,
+                        head_sha=current_head,
+                        actor=configured_actor,
+                        check_app_slug=configured_check_app_slug,
+                        status_context=configured_status_context,
+                        known_ids=known_feedback,
+                        workflow_id=review_workflow.id,
+                        baseline_ids=review_baseline,
+                        seen_ids=seen_review_runs,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except ExternalServiceBlocker as exc:
+                    scenario_a_timeout_failure(
+                        github,
+                        pr_number=pr.number,
+                        current_head=current_head,
+                        latest_review_run=latest_review_run,
+                        coderabbit_terminal=scenario_a_terminal,
+                        report=report,
+                        wait_evidence=exc.evidence,
+                        **timeout_kwargs,
+                    )
                 if signal.get("coderabbit_terminal"):
                     scenario_a_terminal = signal["coderabbit_terminal"]
                 if signal["kind"] == "feedback":
@@ -454,18 +539,33 @@ def main() -> int:
 
                 raw_run = signal.get("run")
                 if raw_run is not None:
-                    latest_review_run = ingest_review_run(
-                        github,
-                        raw_run,
-                        seen_review_runs=seen_review_runs,
-                        configured_actor=configured_actor,
-                        supported_events=review_events,
-                        timeout_seconds=remaining_timeout(
-                            convergence_deadline, args.review_timeout_seconds
-                        ),
-                        report=report,
-                        all_events=all_events,
+                    ingest_timeout = remaining_timeout(
+                        convergence_deadline, args.review_timeout_seconds
                     )
+                    if ingest_timeout <= 0:
+                        break
+                    try:
+                        latest_review_run = ingest_review_run(
+                            github,
+                            raw_run,
+                            seen_review_runs=seen_review_runs,
+                            configured_actor=configured_actor,
+                            supported_events=review_events,
+                            timeout_seconds=ingest_timeout,
+                            report=report,
+                            all_events=all_events,
+                        )
+                    except ExternalServiceBlocker as exc:
+                        scenario_a_timeout_failure(
+                            github,
+                            pr_number=pr.number,
+                            current_head=current_head,
+                            latest_review_run=latest_review_run,
+                            coderabbit_terminal=scenario_a_terminal,
+                            report=report,
+                            wait_evidence=exc.evidence,
+                            **timeout_kwargs,
+                        )
 
                 updated = github.pr_evidence(pr.number)
                 assert not updated.merged and updated.auto_merge is None
@@ -490,12 +590,24 @@ def main() -> int:
                         }
                     )
                     current_head = updated.head_sha
+                    latest_review_run = None
                     report["scenario_a"]["head_history"].append(current_head)
                     continue
 
                 outcome = production_terminal_outcome(
                     updated, latest_review_run, current_head=current_head
                 )
+                cr_kind = str((scenario_a_terminal or {}).get("kind") or "")
+                if outcome == "READY_FOR_HUMAN" and cr_kind == KIND_SKIPPED:
+                    raise ProductionBug(
+                        "Production READY_FOR_HUMAN after CodeRabbit Review skipped",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": scenario_a_terminal,
+                            "failure_kind": "SKIPPED_TREATED_AS_COMPLETED",
+                        },
+                    )
                 if outcome == "FAILED":
                     raise ProductionBug(
                         "Scenario A reached Production FAILED on the current HEAD",
@@ -509,6 +621,21 @@ def main() -> int:
                     pr = updated
                     scenario_a_state = outcome
                     break
+                state = terminal_state(updated)
+                if (
+                    state in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"}
+                    and review_run_completed(latest_review_run)
+                    and run_matches_current_head(latest_review_run, current_head)
+                ):
+                    raise ProductionBug(
+                        f"Production {state} on the current HEAD did not match review run structured events",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": scenario_a_terminal,
+                            "failure_kind": "UNMATCHED_PRODUCTION_TERMINAL",
+                        },
+                    )
                 if (
                     latest_review_run is not None
                     and latest_review_run.conclusion == "failure"
@@ -521,11 +648,26 @@ def main() -> int:
                             "coderabbit_terminal": scenario_a_terminal,
                         },
                     )
-                if signal["kind"] == "production_terminal":
-                    time.sleep(github.poll_seconds)
-
+            else:
+                scenario_a_timeout_failure(
+                    github,
+                    pr_number=pr.number,
+                    current_head=current_head,
+                    latest_review_run=latest_review_run,
+                    coderabbit_terminal=scenario_a_terminal,
+                    report=report,
+                    **timeout_kwargs,
+                )
             if scenario_a_state is None:
-                raise ProductionBug("Scenario A ended without a Production terminal outcome")
+                scenario_a_timeout_failure(
+                    github,
+                    pr_number=pr.number,
+                    current_head=current_head,
+                    latest_review_run=latest_review_run,
+                    coderabbit_terminal=scenario_a_terminal,
+                    report=report,
+                    **timeout_kwargs,
+                )
             if scenario_a_terminal is None:
                 scenario_a_terminal = github.coderabbit_terminal(
                     current_head,
@@ -647,6 +789,8 @@ def main() -> int:
                 "auto_merge": final_pr.auto_merge,
             }
             test_passed = True
+    except KeyboardInterrupt:
+        raise
     except BaseException as exc:
         failure = classify_unhandled(exc)
         report["blocker_or_failure"] = {

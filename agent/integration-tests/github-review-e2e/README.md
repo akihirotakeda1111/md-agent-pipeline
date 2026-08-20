@@ -76,9 +76,13 @@ E2E の終了条件は Production の observable state です。Harness は `cod
 
 Polling は次の順です。
 
-1. Production の `READY_FOR_HUMAN` / `ESCALATED` / `FAILED`（current HEAD、未merge、対応する review run 完了）
-2. terminal でなければ poll 継続
-3. CodeRabbit status と feedback は補助情報
+1. Production ラベル単独では終了しない。current HEAD に対応する review run（prepare の `head_sha`）と structured event が揃って初めて `READY_FOR_HUMAN` / `ESCALATED` / `FAILED` とする
+2. repair 前の古い HEAD に付いた terminal / review run は新しい HEAD の終了判定に使わない
+3. CodeRabbit の `Review skipped` はレビュー正常完了ではない。current HEAD で `READY_FOR_HUMAN` と同時なら Production bug。仕様どおりの到達は `ESCALATED`
+4. terminal（COMPLETED / SKIPPED / FAILED / AMBIGUOUS）があるのに Agent Review が起動しない場合は transport failure
+5. `COMPLETED` かつ未処理 feedback なしなど、本来 READY に収束できる条件なのに `IN_REVIEW` のままなら Production bug。workflow success だけでは Production bug にしない。`NONE` / `IN_PROGRESS` は evidence 不足または timeout
+6. CodeRabbit の check / commit status / feedback が current HEAD に無い場合は external service blocker
+7. 期限超過時は KeyboardInterrupt に頼らず、上記の観測情報付きで自動終了する
 
 Agent Review run の相関は workflow run の `head_sha` や `display_title` を使いません。
 `check_run` / `status` 起動では GitHub が default branch SHA を run HEAD として表示することがあるためです。
@@ -196,9 +200,9 @@ Production workflowへsleep/pollingを追加しません。HarnessだけがAPI s
 - `--convergence-timeout-seconds 5400`: initial reviewからREADY/ESCALATEDまでの全体上限。
 - `--poll-seconds 10`: API poll間隔。
 
-各loopは`time.monotonic()` deadlineを持ち、無期限wait、Production内wait、固定長の盲目的sleepを
-行いません。Production の READY/ESCALATED/FAILED、workflow run、PR label/headを先に確認し、
-CodeRabbit status と feedback は補助情報として記録します。
+各loopは`time.monotonic()` deadlineを持ち、無期限wait、Production内wait、固定長の盲目的sleep、
+KeyboardInterrupt待ちを行いません。期限超過時は候補 run、prepare 結果、Checks / commit status を
+reportへ残し、観測内容から Production bug / transport failure / external service blocker を分類します。
 
 ## Source-of-Truth preflight
 

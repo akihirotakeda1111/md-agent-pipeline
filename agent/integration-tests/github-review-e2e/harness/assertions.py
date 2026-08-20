@@ -128,6 +128,10 @@ def production_terminal_outcome(
         return None
     if run is None:
         return None
+    if not run_matches_current_head(run, current_head):
+        return None
+    if str(run.status) != "completed" and str(run.conclusion) not in {"success", "failure"}:
+        return None
     state = terminal_state(pr)
     if state == "READY_FOR_HUMAN":
         if run.conclusion == "success" and "READY_FOR_HUMAN" in run.events:
@@ -138,6 +142,26 @@ def production_terminal_outcome(
     if state == "FAILED":
         return "FAILED"
     return None
+
+
+def run_matches_current_head(run: RunEvidence | None, current_head: str) -> bool:
+    if run is None:
+        return False
+    expected = current_head.strip().lower()
+    if not expected:
+        return False
+    bound = str(getattr(run, "bound_head_sha", "") or "").strip().lower()
+    sha = str(run.sha or "").strip().lower()
+    observed = bound or sha
+    return bool(observed) and observed == expected
+
+
+def review_run_completed(run: RunEvidence | None) -> bool:
+    if run is None:
+        return False
+    if str(run.status) == "completed":
+        return True
+    return str(run.conclusion) in {"success", "failure"}
 
 
 def assert_tracking_current_head(

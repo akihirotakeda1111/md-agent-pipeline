@@ -62,6 +62,7 @@ class RunEvidence:
     conclusion: str
     jobs: dict[str, str]
     events: tuple[str, ...] = ()
+    bound_head_sha: str = ""
 
 
 @dataclass(frozen=True)

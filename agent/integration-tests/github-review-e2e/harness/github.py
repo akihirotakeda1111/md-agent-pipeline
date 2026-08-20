@@ -5,14 +5,19 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from .assertions import _job_matches, terminal_state
+from .assertions import _job_matches, review_run_completed, run_matches_current_head, terminal_state
 from .coderabbit_terminal import (
+    KIND_AMBIGUOUS,
     KIND_COMPLETED,
+    KIND_FAILED,
+    KIND_IN_PROGRESS,
+    KIND_NONE,
     KIND_SKIPPED,
     resolve_coderabbit_terminal,
     status_context_matches,
 )
 from .models import (
+    ClassifiedFailure,
     EnvironmentBlocker,
     ExternalServiceBlocker,
     FeedbackEvidence,
@@ -276,6 +281,111 @@ def raise_if_prepare_fault(snapshot: dict[str, Any]) -> None:
     raise ProductionBug(
         "Agent Review prepare completed without usable JSON output",
         evidence=evidence,
+    )
+
+
+CODERABBIT_TERMINAL_KINDS = frozenset(
+    {KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED, KIND_AMBIGUOUS}
+)
+PRODUCTION_TERMINAL_STATES = frozenset({"READY_FOR_HUMAN", "ESCALATED", "FAILED"})
+
+
+def _candidate_classification(item: dict[str, Any]) -> str:
+    return str(item.get("classification") or item.get("kind") or "")
+
+
+def classify_scenario_a_timeout(
+    *,
+    pr: PullRequestEvidence | None,
+    current_head: str,
+    latest_review_run: RunEvidence | None,
+    coderabbit_terminal: dict[str, str] | None,
+    candidate_runs: list[dict[str, Any]],
+    feedback_count: int,
+    unprocessed_feedback: bool = False,
+    wait_evidence: dict[str, Any] | None = None,
+) -> ClassifiedFailure:
+    evidence = dict(wait_evidence or {})
+    evidence.setdefault("current_head", current_head)
+    evidence.setdefault("candidate_runs", candidate_runs)
+    evidence["unprocessed_feedback"] = unprocessed_feedback
+    if coderabbit_terminal is not None:
+        evidence["coderabbit_terminal"] = coderabbit_terminal
+    if latest_review_run is not None:
+        evidence["latest_review_run"] = {
+            "id": latest_review_run.id,
+            "conclusion": latest_review_run.conclusion,
+            "event": latest_review_run.event,
+            "events": list(latest_review_run.events),
+            "bound_head_sha": getattr(latest_review_run, "bound_head_sha", ""),
+        }
+    state = terminal_state(pr) if pr is not None else None
+    kind = str(
+        (coderabbit_terminal or evidence.get("coderabbit_terminal") or {}).get("kind")
+        or KIND_NONE
+    )
+    started = any(
+        _candidate_classification(item) not in {CANDIDATE_OTHER_PR, CANDIDATE_STALE_HEAD, ""}
+        for item in candidate_runs
+    )
+    activity = kind not in {KIND_NONE, ""} or feedback_count > 0
+    current_run = run_matches_current_head(latest_review_run, current_head)
+    current_run_completed = current_run and review_run_completed(latest_review_run)
+
+    if (
+        kind == KIND_SKIPPED
+        and state == "READY_FOR_HUMAN"
+        and current_run
+        and latest_review_run is not None
+        and "READY_FOR_HUMAN" in latest_review_run.events
+    ):
+        return ProductionBug(
+            "Production READY_FOR_HUMAN after CodeRabbit Review skipped",
+            evidence={**evidence, "failure_kind": "SKIPPED_TREATED_AS_COMPLETED"},
+        )
+    if state in PRODUCTION_TERMINAL_STATES and current_run_completed:
+        if kind in CODERABBIT_TERMINAL_KINDS and not started:
+            return ProductionBug(
+                "CodeRabbit terminal was observed but Agent Review workflow did not start (transport failure)",
+                evidence={**evidence, "failure_kind": "TRANSPORT_FAILURE"},
+            )
+        return ProductionBug(
+            f"Production {state} on the current HEAD did not match review run structured events",
+            evidence={**evidence, "failure_kind": "UNMATCHED_PRODUCTION_TERMINAL"},
+        )
+    if not activity and not started:
+        return ExternalServiceBlocker(
+            "CodeRabbit produced no check, commit status, or feedback on the current HEAD",
+            evidence={**evidence, "failure_kind": "NO_CODERABBIT_ACTIVITY"},
+        )
+    if kind in {KIND_NONE, KIND_IN_PROGRESS}:
+        failure_kind = (
+            "CODERABBIT_IN_PROGRESS" if kind == KIND_IN_PROGRESS else "EVIDENCE_INCOMPLETE"
+        )
+        return ExternalServiceBlocker(
+            "CodeRabbit terminal evidence on the current HEAD is missing or still in progress",
+            evidence={**evidence, "failure_kind": failure_kind},
+        )
+    if kind in CODERABBIT_TERMINAL_KINDS and not started:
+        return ProductionBug(
+            "CodeRabbit terminal was observed but Agent Review workflow did not start (transport failure)",
+            evidence={**evidence, "failure_kind": "TRANSPORT_FAILURE"},
+        )
+    if (
+        kind == KIND_COMPLETED
+        and not unprocessed_feedback
+        and current_run
+        and latest_review_run is not None
+        and latest_review_run.conclusion == "success"
+        and state is None
+    ):
+        return ProductionBug(
+            "CodeRabbit COMPLETED with no unprocessed feedback but Production remained IN_REVIEW",
+            evidence={**evidence, "failure_kind": "SUCCESS_STILL_IN_REVIEW"},
+        )
+    return ExternalServiceBlocker(
+        "Phase 7 convergence deadline expired before a Production terminal",
+        evidence={**evidence, "failure_kind": "CONVERGENCE_TIMEOUT"},
     )
 
 
@@ -904,6 +1014,46 @@ class GitHub:
                 for sha in seen_heads
             ],
         }
+
+    def collect_scenario_a_wait_evidence(
+        self,
+        *,
+        pr_number: int,
+        head_sha: str,
+        actor: str,
+        check_app_slug: str,
+        status_context: str,
+        workflow_id: int,
+        baseline_ids: set[int],
+    ) -> dict[str, Any]:
+        pr = self.pr_evidence(pr_number)
+        diagnostic = self.coderabbit_terminal(
+            pr.head_sha,
+            actor=actor,
+            check_app_slug=check_app_slug,
+            status_context=status_context,
+        )
+        cache: dict[int, dict[str, Any]] = {}
+        classified = [
+            self.classify_review_candidate(
+                item,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                cache=cache,
+            )
+            for item in new_terminal_wake_runs(self.list_workflow_runs(workflow_id), baseline_ids)
+        ]
+        return self.scenario_a_timeout_evidence(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_head_sha=pr.head_sha,
+            actor=actor,
+            check_app_slug=check_app_slug,
+            status_context=status_context,
+            labels=pr.labels,
+            diagnostic=diagnostic,
+            classified=classified,
+        )
 
     def wait_for_scenario_a_signal(
         self,
