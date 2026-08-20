@@ -1,19 +1,20 @@
 """Map GitHub Checks / commit statuses to CodeRabbit terminal kinds.
 
 Keep this aligned with `agent/review_terminal.py`. The E2E venv does not install
-the production package, and live COMPLETED/SKIPPED payloads have not locked a
-single transport yet, so the harness re-fetches both Checks and commit statuses.
-Wake-up event payloads are not the source of truth.
+the production package. Wake-up event payloads are not the source of truth.
+On the current HEAD the latest matching Check or commit status wins. Commit
+status `state=success` is COMPLETED only when the description is Review completed.
+Missing or unknown descriptions are CODERABBIT_AMBIGUOUS and fail-closed.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-
 KIND_COMPLETED = "CODERABBIT_COMPLETED"
 KIND_SKIPPED = "CODERABBIT_SKIPPED"
 KIND_FAILED = "CODERABBIT_FAILED"
+KIND_AMBIGUOUS = "CODERABBIT_AMBIGUOUS"
 KIND_IN_PROGRESS = "IN_PROGRESS"
 KIND_NONE = "NONE"
 
@@ -23,6 +24,9 @@ CHECK_FAILED_CONCLUSIONS = frozenset(
 )
 CHECK_ACTIVE_STATUSES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 STATUS_FAILED_STATES = frozenset({"failure", "error"})
+STATUS_DESC_COMPLETED = "review completed"
+STATUS_DESC_SKIPPED = "review skipped"
+STATUS_DESC_IN_PROGRESS = "review in progress"
 
 
 def status_context_matches(context: str, configured: str) -> bool:
@@ -49,73 +53,100 @@ def resolve_coderabbit_terminal(
         "head_sha": expected,
         "conclusion": "",
         "observed_at": "",
+        "description": "",
     }
     if not expected:
         return empty
-    matching: list[tuple[str, str, str, str]] = []
-    active = False
+    matching: list[tuple[str, int, str, str, str, str]] = []
     for check in check_runs:
-        sha = str(check.get("head_sha") or "").strip()
-        if sha and sha != expected:
-            continue
-        app = check.get("app")
-        slug = str(app.get("slug") or "").strip() if isinstance(app, dict) else ""
-        if slug != check_app_slug.strip():
-            continue
-        status = str(check.get("status") or "").strip().lower()
-        if status in CHECK_ACTIVE_STATUSES:
-            active = True
-            continue
-        if status and status != "completed":
-            continue
-        conclusion = str(check.get("conclusion") or "").strip().lower()
-        matching.append(
-            (
-                str(check.get("completed_at") or check.get("started_at") or ""),
-                "check_run",
-                conclusion,
-                _map_check_conclusion(conclusion),
-            )
-        )
+        item = _check_timeline_item(check, expected, check_app_slug)
+        if item is not None:
+            matching.append(item)
     for status in statuses:
-        context = status.get("context")
-        creator = status.get("creator")
-        login = creator.get("login") if isinstance(creator, dict) else None
-        context_ok = isinstance(context, str) and status_context_matches(context, status_context)
-        actor_ok = isinstance(login, str) and login.strip() == actor.strip()
-        if not context_ok and not actor_ok:
-            continue
-        state = str(status.get("state") or "").strip().lower()
-        if state == "pending":
-            active = True
-            continue
-        matching.append(
-            (
-                str(status.get("updated_at") or status.get("created_at") or ""),
-                "commit_status",
-                state,
-                _map_status_state(state),
-            )
-        )
-    if active:
-        return {
-            "kind": KIND_IN_PROGRESS,
-            "source": "",
-            "head_sha": expected,
-            "conclusion": "in_progress",
-            "observed_at": "",
-        }
+        item = _status_timeline_item(status, expected, actor, status_context)
+        if item is not None:
+            matching.append(item)
     if not matching:
         return empty
-    matching.sort(key=lambda item: item[0])
-    observed_at, source, conclusion, kind = matching[-1]
+    matching.sort(key=lambda row: (row[0], row[1]))
+    observed_at, _, source, conclusion, kind, description = matching[-1]
+    if kind == KIND_NONE:
+        return empty
     return {
         "kind": kind,
         "source": source,
         "head_sha": expected,
         "conclusion": conclusion,
         "observed_at": observed_at,
+        "description": description,
     }
+
+
+def _check_timeline_item(
+    check: dict[str, Any], expected: str, check_app_slug: str
+) -> tuple[str, int, str, str, str, str] | None:
+    sha = str(check.get("head_sha") or "").strip()
+    if sha and sha != expected:
+        return None
+    app = check.get("app")
+    slug = str(app.get("slug") or "").strip() if isinstance(app, dict) else ""
+    if slug != check_app_slug.strip():
+        return None
+    status = str(check.get("status") or "").strip().lower()
+    observed_at = str(check.get("completed_at") or check.get("started_at") or "")
+    if status in CHECK_ACTIVE_STATUSES:
+        return (observed_at, _entry_id(check), "check_run", "in_progress", KIND_IN_PROGRESS, "")
+    if status and status != "completed":
+        return None
+    conclusion = str(check.get("conclusion") or "").strip().lower()
+    return (
+        observed_at,
+        _entry_id(check),
+        "check_run",
+        conclusion,
+        _map_check_conclusion(conclusion),
+        "",
+    )
+
+
+def _status_timeline_item(
+    status: dict[str, Any], expected: str, actor: str, status_context: str
+) -> tuple[str, int, str, str, str, str] | None:
+    sha = str(status.get("sha") or "").strip()
+    if sha and sha != expected:
+        return None
+    context = status.get("context")
+    creator = status.get("creator")
+    login = creator.get("login") if isinstance(creator, dict) else None
+    context_ok = isinstance(context, str) and status_context_matches(context, status_context)
+    actor_ok = isinstance(login, str) and login.strip() == actor.strip()
+    if not context_ok and not actor_ok:
+        return None
+    observed_at = str(status.get("updated_at") or status.get("created_at") or "")
+    description = str(status.get("description") or "").strip()
+    state = str(status.get("state") or "").strip().lower()
+    kind = _map_status_entry(state, description)
+    if kind is None:
+        return None
+    return (
+        observed_at,
+        _entry_id(status),
+        "commit_status",
+        description or state,
+        kind,
+        description,
+    )
+
+
+def _entry_id(payload: dict[str, Any]) -> int:
+    raw = payload.get("id")
+    if isinstance(raw, bool) or raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return 0
 
 
 def _map_check_conclusion(conclusion: str) -> str:
@@ -123,12 +154,32 @@ def _map_check_conclusion(conclusion: str) -> str:
         return KIND_COMPLETED
     if conclusion in CHECK_SKIPPED_CONCLUSIONS:
         return KIND_SKIPPED
-    return KIND_FAILED
-
-
-def _map_status_state(state: str) -> str:
-    if state == "success":
-        return KIND_COMPLETED
-    if state in STATUS_FAILED_STATES:
+    if conclusion in CHECK_FAILED_CONCLUSIONS:
         return KIND_FAILED
     return KIND_FAILED
+
+
+def _map_status_entry(state: str, description: str) -> str | None:
+    if state in STATUS_FAILED_STATES:
+        return KIND_FAILED
+    described = _kind_from_status_description(description)
+    if described is not None:
+        return described
+    if state == "pending":
+        return KIND_IN_PROGRESS
+    if state == "success":
+        return KIND_AMBIGUOUS
+    return None
+
+
+def _kind_from_status_description(description: str) -> str | None:
+    text = " ".join(description.strip().lower().split())
+    if not text:
+        return None
+    if STATUS_DESC_SKIPPED in text:
+        return KIND_SKIPPED
+    if STATUS_DESC_IN_PROGRESS in text:
+        return KIND_IN_PROGRESS
+    if STATUS_DESC_COMPLETED in text:
+        return KIND_COMPLETED
+    return None

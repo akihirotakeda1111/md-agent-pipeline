@@ -56,6 +56,7 @@ def _compact_commit_status(item: dict[str, Any]) -> dict[str, Any]:
         "context": item.get("context"),
         "state": item.get("state"),
         "sha": item.get("sha"),
+        "description": item.get("description"),
         "creator": login,
         "updated_at": item.get("updated_at") or item.get("created_at"),
     }

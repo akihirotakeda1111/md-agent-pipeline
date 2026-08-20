@@ -277,6 +277,7 @@ class FakeGithub:
         sha: str,
         state: str = "success",
         context: str = "CodeRabbit",
+        description: str = "Review completed",
         updated_at: str = "2026-08-20T00:00:00Z",
     ) -> None:
         self.commit_statuses.append(
@@ -285,6 +286,7 @@ class FakeGithub:
                 "sha": sha,
                 "state": state,
                 "context": context,
+                "description": description,
                 "updated_at": updated_at,
                 "creator": {"login": ACTOR},
             }
@@ -754,6 +756,59 @@ def test_commit_status_completed_allows_ready(tmp_path: Path) -> None:
     fake.add_commit_status(sha=head_sha(repo), state="success")
     result = _run(repo, fake)
     assert result.outcome == "READY_FOR_HUMAN"
+
+
+def test_commit_status_ambiguous_success_escalates(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_commit_status(sha=head_sha(repo), state="success", description="")
+    result = _run(repo, fake)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "CODERABBIT_AMBIGUOUS"
+
+
+def test_commit_status_history_latest_completed_allows_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    sha = head_sha(repo)
+    fake.add_commit_status(
+        sha=sha,
+        state="pending",
+        description="Review in progress",
+        updated_at="2026-08-20T00:00:00Z",
+    )
+    fake.add_commit_status(
+        sha=sha,
+        state="success",
+        description="Review skipped",
+        updated_at="2026-08-20T00:01:00Z",
+    )
+    fake.add_commit_status(
+        sha=sha,
+        state="pending",
+        description="Review in progress",
+        updated_at="2026-08-20T00:02:00Z",
+    )
+    fake.add_commit_status(
+        sha=sha,
+        state="success",
+        description="Review completed",
+        updated_at="2026-08-20T00:03:00Z",
+    )
+    result = _run(repo, fake)
+    assert result.outcome == "READY_FOR_HUMAN"
+
+
+def test_commit_status_skipped_escalates(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_commit_status(sha=head_sha(repo), state="success", description="Review skipped")
+    result = _run(repo, fake)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "CODERABBIT_SKIPPED"
 
 
 def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:

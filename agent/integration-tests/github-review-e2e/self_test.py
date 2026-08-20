@@ -25,7 +25,13 @@ from harness.assertions import (
     production_terminal_outcome,
     terminal_state,
 )
-from harness.coderabbit_terminal import KIND_COMPLETED, KIND_NONE, KIND_SKIPPED, resolve_coderabbit_terminal
+from harness.coderabbit_terminal import (
+    KIND_AMBIGUOUS,
+    KIND_COMPLETED,
+    KIND_NONE,
+    KIND_SKIPPED,
+    resolve_coderabbit_terminal,
+)
 from harness.git import GitRepository
 from harness.github import GitHub
 from harness.models import (
@@ -207,6 +213,57 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(completed["kind"], KIND_COMPLETED)
         self.assertEqual(skipped["kind"], KIND_SKIPPED)
         self.assertEqual(stale["kind"], KIND_NONE)
+        history = resolve_coderabbit_terminal(
+            [],
+            [
+                {
+                    "sha": "abc",
+                    "state": "success",
+                    "context": "CodeRabbit",
+                    "description": "Review skipped",
+                    "updated_at": "2026-08-20T00:01:00Z",
+                    "creator": {"login": "coderabbitai[bot]"},
+                },
+                {
+                    "sha": "abc",
+                    "state": "pending",
+                    "context": "CodeRabbit",
+                    "description": "Review in progress",
+                    "updated_at": "2026-08-20T00:02:00Z",
+                    "creator": {"login": "coderabbitai[bot]"},
+                },
+                {
+                    "sha": "abc",
+                    "state": "success",
+                    "context": "CodeRabbit",
+                    "description": "Review completed",
+                    "updated_at": "2026-08-20T00:03:00Z",
+                    "creator": {"login": "coderabbitai[bot]"},
+                },
+            ],
+            head_sha="abc",
+            actor="coderabbitai[bot]",
+            check_app_slug="coderabbitai",
+            status_context="CodeRabbit",
+        )
+        self.assertEqual(history["kind"], KIND_COMPLETED)
+        self.assertEqual(history["description"], "Review completed")
+        success_only = resolve_coderabbit_terminal(
+            [],
+            [
+                {
+                    "state": "success",
+                    "context": "CodeRabbit",
+                    "updated_at": "2026-08-20T00:03:00Z",
+                    "creator": {"login": "coderabbitai[bot]"},
+                }
+            ],
+            head_sha="abc",
+            actor="coderabbitai[bot]",
+            check_app_slug="coderabbitai",
+            status_context="CodeRabbit",
+        )
+        self.assertEqual(success_only["kind"], KIND_AMBIGUOUS)
 
     def test_run_pr_review_and_scope_assertions(self) -> None:
         execute_workflow = WorkflowInfo(

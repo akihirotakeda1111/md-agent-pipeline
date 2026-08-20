@@ -6,10 +6,13 @@ entries whose app slug, status context, or creator login matches config.
 
 Live COMPLETED/SKIPPED payloads could not be captured here (GitHub auth 401).
 Both GitHub transports are therefore collected after wake-up: Checks
-(`review_progress`) and commit statuses (`reviews.commit_status`). The latest
-matching completed item on the requested SHA wins. An in-progress item on
-that SHA blocks READY. Wake-up still accepts both events until Real E2E
-locks a single transport.
+(`review_progress`) and commit statuses (`reviews.commit_status`).
+
+On the current HEAD, every matching Check and commit status is ordered by
+timestamp. The latest item wins. An older pending / skipped status does not
+override a later completed one. Commit status `state=success` is COMPLETED only
+when the description says Review completed. Missing or unknown descriptions are
+an ambiguous terminal and fail-closed to ESCALATED.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from agent.review_filter import is_configured_actor
 KIND_COMPLETED = "CODERABBIT_COMPLETED"
 KIND_SKIPPED = "CODERABBIT_SKIPPED"
 KIND_FAILED = "CODERABBIT_FAILED"
+KIND_AMBIGUOUS = "CODERABBIT_AMBIGUOUS"
 KIND_IN_PROGRESS = "IN_PROGRESS"
 KIND_NONE = "NONE"
 
@@ -38,6 +42,9 @@ STATUS_SUCCESS = "success"
 STATUS_FAILED_STATES = frozenset({"failure", "error"})
 STATUS_PENDING = "pending"
 TERMINAL_STATUS_STATES = frozenset({"success", "failure", "error"})
+STATUS_DESC_COMPLETED = "review completed"
+STATUS_DESC_SKIPPED = "review skipped"
+STATUS_DESC_IN_PROGRESS = "review in progress"
 
 
 class CodeRabbitTerminalKind(StrEnum):
@@ -46,6 +53,7 @@ class CodeRabbitTerminalKind(StrEnum):
     COMPLETED = KIND_COMPLETED
     SKIPPED = KIND_SKIPPED
     FAILED = KIND_FAILED
+    AMBIGUOUS = KIND_AMBIGUOUS
 
 
 @dataclass(frozen=True)
@@ -55,16 +63,23 @@ class CodeRabbitTerminal:
     head_sha: str
     conclusion: str
     observed_at: str
+    description: str = ""
 
     def is_completed(self) -> bool:
         return self.kind is CodeRabbitTerminalKind.COMPLETED
 
     def is_escalating(self) -> bool:
-        return self.kind in {CodeRabbitTerminalKind.SKIPPED, CodeRabbitTerminalKind.FAILED}
+        return self.kind in {
+            CodeRabbitTerminalKind.SKIPPED,
+            CodeRabbitTerminalKind.FAILED,
+            CodeRabbitTerminalKind.AMBIGUOUS,
+        }
 
     def escalation_code(self) -> str:
         if self.kind is CodeRabbitTerminalKind.SKIPPED:
             return "CODERABBIT_SKIPPED"
+        if self.kind is CodeRabbitTerminalKind.AMBIGUOUS:
+            return "CODERABBIT_AMBIGUOUS"
         return "CODERABBIT_REVIEW_FAILED"
 
     def to_json_dict(self) -> dict[str, str]:
@@ -74,6 +89,7 @@ class CodeRabbitTerminal:
             "head_sha": self.head_sha,
             "conclusion": self.conclusion,
             "observed_at": self.observed_at,
+            "description": self.description,
         }
 
 
@@ -170,59 +186,29 @@ def resolve_coderabbit_terminal(
     expected = head_sha.strip()
     if not expected:
         return none_terminal("")
-    matching: list[tuple[str, str, str, str]] = []
-    active = False
+    matching: list[tuple[str, int, str, str, str, str]] = []
     for check in check_runs:
-        if not _check_belongs(check, expected, cfg):
-            continue
-        status = str(check.get("status") or "").strip().lower()
-        if status in CHECK_ACTIVE_STATUSES:
-            active = True
-            continue
-        if status and status != "completed":
-            continue
-        conclusion = str(check.get("conclusion") or "").strip().lower()
-        matching.append(
-            (
-                str(check.get("completed_at") or check.get("started_at") or ""),
-                "check_run",
-                conclusion,
-                _map_check_conclusion(conclusion).value,
-            )
-        )
+        item = _check_timeline_item(check, expected, cfg)
+        if item is not None:
+            matching.append(item)
     for status in statuses:
-        if not _status_belongs(status, cfg):
-            continue
-        state = str(status.get("state") or "").strip().lower()
-        if state == STATUS_PENDING:
-            active = True
-            continue
-        matching.append(
-            (
-                str(status.get("updated_at") or status.get("created_at") or ""),
-                "commit_status",
-                state,
-                _map_status_state(state).value,
-            )
-        )
-    if active:
-        return CodeRabbitTerminal(
-            kind=CodeRabbitTerminalKind.IN_PROGRESS,
-            source="",
-            head_sha=expected,
-            conclusion="in_progress",
-            observed_at="",
-        )
+        item = _status_timeline_item(status, expected, cfg)
+        if item is not None:
+            matching.append(item)
     if not matching:
         return none_terminal(expected)
-    matching.sort(key=lambda item: item[0])
-    observed_at, source, conclusion, kind_value = matching[-1]
+    matching.sort(key=lambda row: (row[0], row[1]))
+    observed_at, _, source, conclusion, kind_value, description = matching[-1]
+    kind = CodeRabbitTerminalKind(kind_value)
+    if kind is CodeRabbitTerminalKind.NONE:
+        return none_terminal(expected)
     return CodeRabbitTerminal(
-        kind=CodeRabbitTerminalKind(kind_value),
+        kind=kind,
         source=source,
         head_sha=expected,
         conclusion=conclusion,
         observed_at=observed_at,
+        description=description,
     )
 
 
@@ -233,13 +219,65 @@ def _check_belongs(check: dict[str, Any], head_sha: str, cfg: CodeRabbitConfig) 
     return check_app_matches(check, cfg.check_app_slug)
 
 
-def _status_belongs(status: dict[str, Any], cfg: CodeRabbitConfig) -> bool:
+def _status_belongs(status: dict[str, Any], head_sha: str, cfg: CodeRabbitConfig) -> bool:
+    sha = str(status.get("sha") or "").strip()
+    if sha and sha != head_sha:
+        return False
     context = status.get("context")
     if isinstance(context, str) and status_context_matches(context, cfg.status_context):
         return True
     creator = status.get("creator")
     login = creator.get("login") if isinstance(creator, dict) else None
     return is_configured_actor(login if isinstance(login, str) else None, cfg.actor)
+
+
+def _check_timeline_item(
+    check: dict[str, Any], head_sha: str, cfg: CodeRabbitConfig
+) -> tuple[str, int, str, str, str, str] | None:
+    if not _check_belongs(check, head_sha, cfg):
+        return None
+    status = str(check.get("status") or "").strip().lower()
+    observed_at = str(check.get("completed_at") or check.get("started_at") or "")
+    if status in CHECK_ACTIVE_STATUSES:
+        return (observed_at, _entry_id(check), "check_run", "in_progress", KIND_IN_PROGRESS, "")
+    if status and status != "completed":
+        return None
+    conclusion = str(check.get("conclusion") or "").strip().lower()
+    kind = _map_check_conclusion(conclusion)
+    return (observed_at, _entry_id(check), "check_run", conclusion, kind.value, "")
+
+
+def _status_timeline_item(
+    status: dict[str, Any], head_sha: str, cfg: CodeRabbitConfig
+) -> tuple[str, int, str, str, str, str] | None:
+    if not _status_belongs(status, head_sha, cfg):
+        return None
+    observed_at = str(status.get("updated_at") or status.get("created_at") or "")
+    description = str(status.get("description") or "")
+    state = str(status.get("state") or "").strip().lower()
+    kind = _map_status_entry(state, description)
+    if kind is None:
+        return None
+    conclusion = description.strip() or state
+    return (
+        observed_at,
+        _entry_id(status),
+        "commit_status",
+        conclusion,
+        kind.value,
+        description.strip(),
+    )
+
+
+def _entry_id(payload: dict[str, Any]) -> int:
+    raw = payload.get("id")
+    if isinstance(raw, bool) or raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return 0
 
 
 def _map_check_conclusion(conclusion: str) -> CodeRabbitTerminalKind:
@@ -252,9 +290,27 @@ def _map_check_conclusion(conclusion: str) -> CodeRabbitTerminalKind:
     return CodeRabbitTerminalKind.FAILED
 
 
-def _map_status_state(state: str) -> CodeRabbitTerminalKind:
-    if state == STATUS_SUCCESS:
-        return CodeRabbitTerminalKind.COMPLETED
+def _map_status_entry(state: str, description: str) -> CodeRabbitTerminalKind | None:
     if state in STATUS_FAILED_STATES:
         return CodeRabbitTerminalKind.FAILED
-    return CodeRabbitTerminalKind.FAILED
+    described = _kind_from_status_description(description)
+    if described is not None:
+        return described
+    if state == STATUS_PENDING:
+        return CodeRabbitTerminalKind.IN_PROGRESS
+    if state == STATUS_SUCCESS:
+        return CodeRabbitTerminalKind.AMBIGUOUS
+    return None
+
+
+def _kind_from_status_description(description: str) -> CodeRabbitTerminalKind | None:
+    text = " ".join(description.strip().lower().split())
+    if not text:
+        return None
+    if STATUS_DESC_SKIPPED in text:
+        return CodeRabbitTerminalKind.SKIPPED
+    if STATUS_DESC_IN_PROGRESS in text:
+        return CodeRabbitTerminalKind.IN_PROGRESS
+    if STATUS_DESC_COMPLETED in text:
+        return CodeRabbitTerminalKind.COMPLETED
+    return None
