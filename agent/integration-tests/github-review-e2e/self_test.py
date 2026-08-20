@@ -22,6 +22,7 @@ from harness.assertions import (
     assert_pr_scope,
     assert_review_run,
     assert_tracking_current_head,
+    production_terminal_outcome,
     terminal_state,
 )
 from harness.coderabbit_terminal import KIND_COMPLETED, KIND_NONE, KIND_SKIPPED, resolve_coderabbit_terminal
@@ -274,6 +275,22 @@ class HarnessTests(unittest.TestCase):
         assert_review_run(
             check_run, configured_actor=actor, supported_events=("issue_comment", "check_run")
         )
+        escalated = RunEvidence(
+            14,
+            1,
+            "https://example.invalid/runs/14",
+            "b" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "failure",
+            {"Prepare review": "success", "Review and repair": "failure"},
+            ("REVIEW_RECEIVED", "REVIEW_ESCALATED"),
+        )
+        assert_review_run(
+            escalated, configured_actor=actor, supported_events=("issue_comment", "check_run")
+        )
         negative = RunEvidence(
             12,
             1,
@@ -304,6 +321,69 @@ class HarnessTests(unittest.TestCase):
             None,
         )
         self.assertEqual(terminal_state(pr), "READY_FOR_HUMAN")
+        ready_run = RunEvidence(
+            20,
+            1,
+            "https://example.invalid/runs/20",
+            "b" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "success",
+            {"Prepare review": "success", "Review and repair": "success"},
+            ("REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"),
+        )
+        self.assertEqual(
+            production_terminal_outcome(pr, ready_run, current_head="b" * 40),
+            "READY_FOR_HUMAN",
+        )
+        stale_ready = PullRequestEvidence(
+            4,
+            "url",
+            self.scenario.target_branch,
+            self.scenario.base_branch,
+            "b" * 40,
+            "",
+            ("agent:ready",),
+            "open",
+            False,
+            None,
+            None,
+        )
+        self.assertIsNone(
+            production_terminal_outcome(stale_ready, ready_run, current_head="c" * 40)
+        )
+        escalated_pr = PullRequestEvidence(
+            4,
+            "url",
+            self.scenario.target_branch,
+            self.scenario.base_branch,
+            "b" * 40,
+            "",
+            ("agent:escalated",),
+            "open",
+            False,
+            None,
+            None,
+        )
+        escalated_run = RunEvidence(
+            21,
+            1,
+            "https://example.invalid/runs/21",
+            "b" * 40,
+            self.scenario.target_branch,
+            "check_run",
+            "github-actions[bot]",
+            "completed",
+            "failure",
+            {"Prepare review": "success", "Review and repair": "failure"},
+            ("REVIEW_RECEIVED", "REVIEW_ESCALATED"),
+        )
+        self.assertEqual(
+            production_terminal_outcome(escalated_pr, escalated_run, current_head="b" * 40),
+            "ESCALATED",
+        )
         assert_linear_head_change(
             {
                 "status": "ahead",
@@ -396,6 +476,16 @@ class HarnessTests(unittest.TestCase):
         source = inspect.getsource(GitHub)
         self.assertIn("time.monotonic() + timeout_seconds", source)
         self.assertNotIn("while True", source)
+
+    def test_scenario_a_poll_uses_production_terminal_not_coderabbit_mapper(self) -> None:
+        wait_source = inspect.getsource(GitHub.wait_for_scenario_a_signal)
+        self.assertIn("production_terminal", wait_source)
+        self.assertNotIn("KIND_COMPLETED", wait_source)
+        self.assertNotIn("KIND_SKIPPED", wait_source)
+        runner_source = inspect.getsource(runner)
+        self.assertIn("production_terminal_outcome", runner_source)
+        self.assertNotIn("KIND_COMPLETED", runner_source)
+        self.assertNotIn("KIND_SKIPPED", runner_source)
 
 
 if __name__ == "__main__":

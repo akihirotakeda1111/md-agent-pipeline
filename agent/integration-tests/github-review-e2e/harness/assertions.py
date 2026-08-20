@@ -78,11 +78,13 @@ def assert_review_run(
         assert run.actor == configured_actor, (
             f"review workflow actor {run.actor!r} does not match configured actor {configured_actor!r}"
         )
-    assert run.conclusion == "success", f"review workflow conclusion: {run.conclusion}"
+    assert run.conclusion in {"success", "failure"}, (
+        f"review workflow conclusion: {run.conclusion}"
+    )
     prepare = _matching_jobs(run, "prepare review")
     review = _matching_jobs(run, "review and repair")
     assert len(prepare) == 1 and prepare[0][1] == "success", f"prepare job: {prepare}"
-    assert len(review) == 1 and review[0][1] == "success", f"review job: {review}"
+    assert len(review) == 1 and review[0][1] in {"success", "failure"}, f"review job: {review}"
 
 
 def assert_non_coderabbit_short_circuit(run: RunEvidence, configured_actor: str) -> None:
@@ -115,6 +117,31 @@ def terminal_state(pr: PullRequestEvidence) -> str | None:
     found = [value for label, value in states.items() if label in pr.labels]
     assert len(found) <= 1, f"multiple terminal labels on PR: {pr.labels}"
     return found[0] if found else None
+
+
+def production_terminal_outcome(
+    pr: PullRequestEvidence,
+    run: RunEvidence | None,
+    *,
+    current_head: str,
+) -> str | None:
+    """Map observable Production state. Does not interpret CodeRabbit checks."""
+    if pr.merged or pr.auto_merge is not None:
+        return None
+    if pr.head_sha != current_head:
+        return None
+    if run is None:
+        return None
+    state = terminal_state(pr)
+    if state == "READY_FOR_HUMAN":
+        if run.conclusion == "success" and "READY_FOR_HUMAN" in run.events:
+            return "READY_FOR_HUMAN"
+        return None
+    if state == "ESCALATED" and "REVIEW_ESCALATED" in run.events:
+        return "ESCALATED"
+    if state == "FAILED":
+        return "FAILED"
+    return None
 
 
 def assert_tracking_current_head(

@@ -21,9 +21,9 @@ from harness.assertions import (
     assert_pr_scope,
     assert_review_run,
     assert_tracking_current_head,
+    production_terminal_outcome,
     terminal_state,
 )
-from harness.coderabbit_terminal import KIND_COMPLETED, KIND_FAILED, KIND_SKIPPED
 from harness.git import GitRepository
 from harness.github import GitHub
 from harness.models import (
@@ -191,6 +191,33 @@ def remaining_timeout(deadline: float, configured: int) -> int:
     if remaining <= 0:
         raise ExternalServiceBlocker("Phase 7 convergence deadline expired")
     return min(configured, remaining)
+
+
+def ingest_review_run(
+    github: GitHub,
+    raw_run: dict[str, Any],
+    *,
+    seen_review_runs: set[int],
+    configured_actor: str,
+    supported_events: tuple[str, ...],
+    timeout_seconds: int,
+    report: dict[str, Any],
+    all_events: list[str],
+):
+    run_id = int(raw_run["id"])
+    already = run_id in seen_review_runs
+    seen_review_runs.add(run_id)
+    completed = github.wait_attempt(run_id, timeout_seconds)
+    review_run = github.run_evidence(completed)
+    assert_review_run(
+        review_run,
+        configured_actor=configured_actor,
+        supported_events=supported_events,
+    )
+    if not already:
+        report["scenario_a"]["review_runs"].append(run_dict(review_run))
+        all_events.extend(review_run.events)
+    return review_run
 
 
 def classify_unhandled(exc: BaseException) -> ClassifiedFailure:
@@ -399,6 +426,7 @@ def main() -> int:
             all_events: list[str] = []
             scenario_a_state: str | None = None
             scenario_a_terminal: dict[str, str] | None = None
+            latest_review_run = None
             while True:
                 signal = github.wait_for_scenario_a_signal(
                     pr_number=pr.number,
@@ -414,6 +442,8 @@ def main() -> int:
                     ),
                     correlation_text=suffix,
                 )
+                if signal.get("coderabbit_terminal"):
+                    scenario_a_terminal = signal["coderabbit_terminal"]
                 if signal["kind"] == "feedback":
                     for item in signal["items"]:
                         identity = (item.kind, item.source_id, item.updated_at)
@@ -422,122 +452,87 @@ def main() -> int:
                             known_feedback.add(identity)
                     continue
 
-                if signal["kind"] == "terminal":
-                    scenario_a_terminal = signal["terminal"]
-                    if signal["terminal"]["kind"] == KIND_FAILED:
-                        raise ExternalServiceBlocker(
-                            "CodeRabbit terminal on the current HEAD is a failure family",
-                            evidence=signal["terminal"],
-                        )
-                    updated = github.pr_evidence(pr.number)
-                    assert not updated.merged and updated.auto_merge is None
-                    if updated.head_sha == current_head:
-                        state = terminal_state(updated)
-                        if (
-                            signal["terminal"]["kind"] == KIND_COMPLETED
-                            and state == "READY_FOR_HUMAN"
-                        ):
-                            pr = updated
-                            scenario_a_state = "READY_FOR_HUMAN"
-                            break
-                        if (
-                            signal["terminal"]["kind"] == KIND_SKIPPED
-                            and state == "ESCALATED"
-                        ):
-                            pr = updated
-                            scenario_a_state = "ESCALATED"
-                            break
-                    raw_run = github.wait_new_review_run(
-                        review_workflow.id,
-                        seen_review_runs,
+                raw_run = signal.get("run")
+                if raw_run is not None:
+                    latest_review_run = ingest_review_run(
+                        github,
+                        raw_run,
+                        seen_review_runs=seen_review_runs,
+                        configured_actor=configured_actor,
+                        supported_events=review_events,
                         timeout_seconds=remaining_timeout(
                             convergence_deadline, args.review_timeout_seconds
                         ),
-                        actor=configured_actor,
-                        correlation_text=suffix,
-                        head_sha=current_head,
-                        allow_terminal_events=True,
+                        report=report,
+                        all_events=all_events,
                     )
-                else:
-                    raw_run = signal["run"]
-
-                run_id = int(raw_run["id"])
-                seen_review_runs.add(run_id)
-                completed = github.wait_attempt(
-                    run_id,
-                    remaining_timeout(convergence_deadline, args.review_timeout_seconds),
-                )
-                review_run = github.run_evidence(completed)
-                assert_review_run(
-                    review_run,
-                    configured_actor=configured_actor,
-                    supported_events=review_events,
-                )
-                report["scenario_a"]["review_runs"].append(run_dict(review_run))
-                all_events.extend(review_run.events)
 
                 updated = github.pr_evidence(pr.number)
                 assert not updated.merged and updated.auto_merge is None
                 if updated.head_sha != current_head:
+                    if latest_review_run is None:
+                        raise ProductionBug(
+                            "PR HEAD changed before a review run was observed",
+                            evidence={"before": current_head, "after": updated.head_sha},
+                        )
                     comparison = github.compare(current_head, updated.head_sha)
                     assert_linear_head_change(comparison, scenario)
                     assert github.commit_files(updated.head_sha) == [scenario.generated_file]
-                    assert "REVIEW_FIX_STARTED" in review_run.events
-                    assert "REVIEW_FIX_VALIDATION_PASSED" in review_run.events
+                    assert "REVIEW_FIX_STARTED" in latest_review_run.events
+                    assert "REVIEW_FIX_VALIDATION_PASSED" in latest_review_run.events
                     report["scenario_a"]["repairs"] = report["scenario_a"].get("repairs", [])
                     report["scenario_a"]["repairs"].append(
                         {
                             "before": current_head,
                             "after": updated.head_sha,
                             "ahead_by": comparison.get("ahead_by"),
-                            "run_id": review_run.id,
+                            "run_id": latest_review_run.id,
                         }
                     )
                     current_head = updated.head_sha
                     report["scenario_a"]["head_history"].append(current_head)
-                    scenario_a_terminal = None
                     continue
 
-                observed_terminal = github.coderabbit_terminal(
+                outcome = production_terminal_outcome(
+                    updated, latest_review_run, current_head=current_head
+                )
+                if outcome == "FAILED":
+                    raise ProductionBug(
+                        "Scenario A reached Production FAILED on the current HEAD",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": scenario_a_terminal,
+                        },
+                    )
+                if outcome in {"READY_FOR_HUMAN", "ESCALATED"}:
+                    pr = updated
+                    scenario_a_state = outcome
+                    break
+                if (
+                    latest_review_run is not None
+                    and latest_review_run.conclusion == "failure"
+                ):
+                    raise ProductionBug(
+                        "review workflow failed without a Production READY/ESCALATED terminal",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": scenario_a_terminal,
+                        },
+                    )
+                if signal["kind"] == "production_terminal":
+                    time.sleep(github.poll_seconds)
+
+            if scenario_a_state is None:
+                raise ProductionBug("Scenario A ended without a Production terminal outcome")
+            if scenario_a_terminal is None:
+                scenario_a_terminal = github.coderabbit_terminal(
                     current_head,
                     actor=configured_actor,
                     check_app_slug=configured_check_app_slug,
                     status_context=configured_status_context,
                 )
-                scenario_a_terminal = observed_terminal
-                state = terminal_state(updated)
-                if (
-                    observed_terminal["kind"] == KIND_COMPLETED
-                    and state == "READY_FOR_HUMAN"
-                ):
-                    pr = updated
-                    scenario_a_state = "READY_FOR_HUMAN"
-                    break
-                if (
-                    observed_terminal["kind"] == KIND_SKIPPED
-                    and state == "ESCALATED"
-                ):
-                    pr = updated
-                    scenario_a_state = "ESCALATED"
-                    break
-                if observed_terminal["kind"] == KIND_FAILED:
-                    raise ExternalServiceBlocker(
-                        "CodeRabbit terminal on the current HEAD is a failure family",
-                        evidence=observed_terminal,
-                    )
-                if state in {"ESCALATED", "FAILED"}:
-                    raise ProductionBug(
-                        "Scenario A reached a terminal PR label without CodeRabbit "
-                        f"COMPLETED/SKIPPED evidence: {state}",
-                        evidence={
-                            "labels": list(updated.labels),
-                            "events": all_events,
-                            "coderabbit_terminal": observed_terminal,
-                        },
-                    )
-
-            if scenario_a_state is None or scenario_a_terminal is None:
-                raise ProductionBug("Scenario A ended without a CodeRabbit terminal outcome")
             if scenario_a_state == "READY_FOR_HUMAN":
                 required_events = {"REVIEW_RECEIVED", "REVIEW_COLLECTED", "READY_FOR_HUMAN"}
                 if report["scenario_a"]["feedback"]:
@@ -603,7 +598,6 @@ def main() -> int:
                 check_app_slug=configured_check_app_slug,
                 status_context=configured_status_context,
             )
-            assert after_terminal["kind"] == scenario_a_terminal["kind"]
             assert not after_b.merged and after_b.auto_merge is None
             report["scenario_b"].update(
                 {

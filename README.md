@@ -140,7 +140,7 @@ python agent/integration-tests/review-integration/run.py --production-root .
 
 ### Phase 7 — Real GitHub E2E
 
-本番 `agent-execute.yml` と `agent-review.yml` をそのまま使い、Real CodeRabbit、Real classifier、Real Codex review repair、Real GitHub 上の terminal 収束を確認します。Scenario A は `COMPLETED → READY_FOR_HUMAN` と `SKIPPED → ESCALATED` のどちらも仕様上の正常 outcome です。E2E専用workflowや Fake service は使いません。Task Spec の `base_branch` は temporary branch（`e2e/phase7-*`）自身です。repository default へは commit しません。
+本番 `agent-execute.yml` と `agent-review.yml` をそのまま使い、Real CodeRabbit、Real classifier、Real Codex review repair、Real GitHub 上の Production terminal 収束を確認します。Scenario A の終了条件は `READY_FOR_HUMAN`（`agent:ready`）または仕様どおりの `ESCALATED` であり、Harness は CodeRabbit Checks を READY 判定に使いません。E2E専用workflowや Fake service は使いません。Task Spec の `base_branch` は temporary branch（`e2e/phase7-*`）自身です。repository default へは commit しません。
 
 `gh` には対象repositoryについて次が必要です。
 

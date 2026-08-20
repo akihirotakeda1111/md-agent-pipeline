@@ -5,12 +5,8 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from .coderabbit_terminal import (
-    KIND_COMPLETED,
-    KIND_FAILED,
-    KIND_SKIPPED,
-    resolve_coderabbit_terminal,
-)
+from .assertions import terminal_state
+from .coderabbit_terminal import resolve_coderabbit_terminal
 from .models import (
     EnvironmentBlocker,
     ExternalServiceBlocker,
@@ -391,6 +387,27 @@ class GitHub:
             status_context=status_context,
         )
 
+    def correlated_review_runs(
+        self,
+        workflow_id: int,
+        *,
+        actor: str,
+        correlation_text: str,
+        head_sha: str | None,
+    ) -> list[dict[str, Any]]:
+        token = correlation_text.lower()
+        matched: list[dict[str, Any]] = []
+        for item in self.list_workflow_runs(workflow_id):
+            event_name = str(item.get("event") or "")
+            run_actor = str((item.get("actor") or {}).get("login") or "")
+            title = str(item.get("display_title") or "").lower()
+            run_sha = str(item.get("head_sha") or "")
+            actor_ok = run_actor == actor or event_name in TERMINAL_WAKE_EVENTS
+            correlated = token in title or (head_sha is not None and run_sha == head_sha)
+            if actor_ok and correlated:
+                matched.append(item)
+        return matched
+
     def wait_for_scenario_a_signal(
         self,
         *,
@@ -406,35 +423,71 @@ class GitHub:
         correlation_text: str,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
+        diagnostic: dict[str, str] | None = None
+        labels: tuple[str, ...] = ()
         while time.monotonic() < deadline:
-            runs = [
-                item
-                for item in self.list_workflow_runs(workflow_id)
-                if int(item["id"]) not in baseline_ids
-            ]
-            matching_runs = []
-            token = correlation_text.lower()
-            for item in runs:
-                event_name = str(item.get("event") or "")
-                run_actor = str((item.get("actor") or {}).get("login") or "")
-                title = str(item.get("display_title") or "").lower()
-                run_sha = str(item.get("head_sha") or "")
-                actor_ok = run_actor == actor or event_name in TERMINAL_WAKE_EVENTS
-                correlated = token in title or run_sha == head_sha
-                if actor_ok and correlated:
-                    matching_runs.append(item)
-            if matching_runs:
-                chosen = sorted(matching_runs, key=lambda item: str(item.get("created_at") or ""))[0]
-                return {"kind": "run", "run": chosen}
-
-            terminal = self.coderabbit_terminal(
-                head_sha,
+            pr = self.pr_evidence(pr_number)
+            labels = pr.labels
+            diagnostic = self.coderabbit_terminal(
+                pr.head_sha,
                 actor=actor,
                 check_app_slug=check_app_slug,
                 status_context=status_context,
             )
-            if terminal["kind"] in {KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED}:
-                return {"kind": "terminal", "terminal": terminal}
+            correlated = self.correlated_review_runs(
+                workflow_id,
+                actor=actor,
+                correlation_text=correlation_text,
+                head_sha=head_sha,
+            )
+            if pr.head_sha != head_sha:
+                correlated.extend(
+                    item
+                    for item in self.correlated_review_runs(
+                        workflow_id,
+                        actor=actor,
+                        correlation_text=correlation_text,
+                        head_sha=pr.head_sha,
+                    )
+                    if int(item["id"]) not in {int(existing["id"]) for existing in correlated}
+                )
+            active = [
+                item
+                for item in correlated
+                if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
+            ]
+            new_runs = [item for item in correlated if int(item["id"]) not in baseline_ids]
+
+            if pr.head_sha == head_sha and not active:
+                state = terminal_state(pr)
+                completed = [
+                    item
+                    for item in correlated
+                    if str(item.get("status") or "") == "completed"
+                ]
+                if state in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"} and completed:
+                    latest = sorted(
+                        completed,
+                        key=lambda item: str(
+                            item.get("updated_at") or item.get("created_at") or ""
+                        ),
+                    )[-1]
+                    return {
+                        "kind": "production_terminal",
+                        "state": state,
+                        "run": latest,
+                        "coderabbit_terminal": diagnostic,
+                    }
+
+            if new_runs:
+                chosen = sorted(
+                    new_runs, key=lambda item: str(item.get("created_at") or "")
+                )[0]
+                return {
+                    "kind": "run",
+                    "run": chosen,
+                    "coderabbit_terminal": diagnostic,
+                }
 
             feedback = [
                 item
@@ -443,11 +496,20 @@ class GitHub:
                 and item.actor == actor
             ]
             if feedback:
-                return {"kind": "feedback", "items": feedback}
+                return {
+                    "kind": "feedback",
+                    "items": feedback,
+                    "coderabbit_terminal": diagnostic,
+                }
             time.sleep(self.poll_seconds)
         raise ExternalServiceBlocker(
-            "CodeRabbit terminal, feedback, or review run was not observed before timeout",
-            evidence={"head_sha": head_sha, "configured_actor": actor},
+            "production review terminal or review run was not observed before timeout",
+            evidence={
+                "head_sha": head_sha,
+                "configured_actor": actor,
+                "labels": list(labels),
+                "coderabbit_terminal": diagnostic,
+            },
         )
 
     def branch_sha(self, branch: str) -> str:

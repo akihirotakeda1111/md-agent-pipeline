@@ -60,43 +60,45 @@ Task Specはsingle Python fileだけを許可します。Task ValidationとFinal
 
 ## 3. Phase 7 acceptance scenarios
 
-### Scenario A — Review convergence (dual terminal)
+### Scenario A — Review convergence
 
 ```text
 Production execute
 -> Real PR
--> Real CodeRabbit terminal on current HEAD
 -> agent-review.yml (comment and/or check_run/status)
--> [COMPLETED]
-     existing classifier / Policy
-     -> [ACTIONABLEなら] Real Codex repair -> linear push -> wait again on new HEAD
-     -> no unprocessed ACTIONABLE
-     -> READY_FOR_HUMAN
--> [SKIPPED]
-     classifier / Codex / commit / push なし
-     -> ESCALATED
+-> Production observable terminal on current HEAD
+     READY_FOR_HUMAN + agent:ready + workflow completed + PR unmerged
+     or ESCALATED + agent:escalated（CodeRabbit SKIPPED 等の仕様どおりの到達含む）
+-> [ACTIONABLE repair] Real Codex repair -> linear push -> wait again on new HEAD
 ```
 
-`COMPLETED` と `SKIPPED` はどちらも仕様上の正常な E2E outcome です。failure / timed_out などの FAILED family は READY にせず、E2E では blocker として扱います。feedback 0件でも `COMPLETED` なら READY を許可します。terminal evidence が無い間は `IN_REVIEW` のまま待ち、READY にしません。repair 後は旧 HEAD の COMPLETED/SKIPPED を使いません。
+E2E の終了条件は Production の observable state です。Harness は `coderabbit_terminal() == COMPLETED` を必須にしません。CodeRabbit の Checks / commit status は外部サービスが動いた診断情報として report に残し、READY 判定には使いません。
+
+Polling は次の順です。
+
+1. Production の `READY_FOR_HUMAN` / `ESCALATED` / `FAILED`（current HEAD、未merge、対応する review run 完了）
+2. terminal でなければ poll 継続
+3. CodeRabbit status と feedback は補助情報
+
+古い HEAD に付いた `agent:ready` は成功にしません。最新 review run の structured event が current HEAD に対応していることを確認します。
 
 最低限、次をassertします。
 
 - execute workflowとparse/execute/deliver jobsがsuccess。
 - open PRが1つ、head/base/work-unit/allowed fileが一致。
-- current HEADのCodeRabbit terminal（Checks または commit status）を API 再取得している。
-- その実eventが`agent-review.yml`を起動し、prepare/review jobsがsuccess。
-- COMPLETED 経路: structured eventsに`REVIEW_RECEIVED`、`REVIEW_COLLECTED`、`READY_FOR_HUMAN`。feedbackがある場合は`REVIEW_CLASSIFIED`、`REVIEW_POLICY_APPLIED`も存在。
-- SKIPPED 経路: `REVIEW_RECEIVED`、`REVIEW_ESCALATED`。classifier/Codex/Git writeなし。READYにしない。
+- `agent-review.yml` の prepare/review jobsが完了し、対象がcurrent HEAD。
+- READY 経路: structured eventsに`REVIEW_RECEIVED`、`REVIEW_COLLECTED`、`READY_FOR_HUMAN`。feedbackがある場合は`REVIEW_CLASSIFIED`、`REVIEW_POLICY_APPLIED`も存在。`agent:ready`。PR未merge。
+- ESCALATED 経路: `REVIEW_RECEIVED`、`REVIEW_ESCALATED`。`agent:escalated`。CodeRabbit SKIPPED 等で Production が仕様どおり到達した場合は E2E 成功。
 - ACTIONABLE repairでHEADが変わった場合に限り、`REVIEW_FIX_STARTED`、
   `REVIEW_FIX_VALIDATION_PASSED`、allowed fileだけのlinear push、new HEAD向けの
-  incremental terminal と次review runを確認。
+  次review runを確認。
 - READY 経路では current work-unitと最終current HEADに紐づくtracking commentが1つ。
-- reportに`coderabbit_terminal`、`actionable_repair_observed`、`repair_count`、
+- reportに`coderabbit_terminal`（診断）、`actionable_repair_observed`、`repair_count`、
   `current_head_feedback_converged`を記録。
-- 最終状態は`READY_FOR_HUMAN`または`ESCALATED`（SKIPPED時）。PRはopen、未merge、auto-mergeなし。
+- 最終状態は`READY_FOR_HUMAN`または`ESCALATED`。PRはopen、未merge、auto-mergeなし。
 - 全stateのPR数が1で、重複PRなし。
 
-Scenario AでProductionが仕様どおり`FAILED`へ到達した場合、または COMPLETED/SKIPPED 以外で`ESCALATED`した場合は証拠をreportへ保存し、この dual-terminal acceptance は FAIL です。内容を固定してCodeRabbitを誘導する workaroundは追加しません。
+Scenario Aで Production が `FAILED` へ到達した場合は証拠を report へ保存し、この acceptance は FAIL です。内容を固定してCodeRabbitを誘導する workaroundは追加しません。
 
 ### Scenario B — Non-CodeRabbit actor fail-closed
 
@@ -110,7 +112,7 @@ real non-CodeRabbit GitHub event
 -> actor mismatch
 -> review job skipped
 -> classifierなし / Codexなし / pushなし
--> Scenario A の terminal state と HEAD を維持
+-> Scenario A の Production terminal state と HEAD を維持
 ```
 
 これはReal external serviceを不自然に改変せず、安全に再現できるintegration contract R02相当です。
@@ -182,12 +184,13 @@ Production workflowへsleep/pollingを追加しません。HarnessだけがAPI s
 
 - `--discovery-timeout-seconds 240`: run/PR/event discovery。
 - `--execute-timeout-seconds 1800`: execute workflow完了。
-- `--review-timeout-seconds 1800`: CodeRabbit terminal / feedbackまたは各review run完了。
-- `--convergence-timeout-seconds 5400`: initial reviewからREADYまでの全体上限。
+- `--review-timeout-seconds 1800`: Production review terminal または各review run完了。
+- `--convergence-timeout-seconds 5400`: initial reviewからREADY/ESCALATEDまでの全体上限。
 - `--poll-seconds 10`: API poll間隔。
 
 各loopは`time.monotonic()` deadlineを持ち、無期限wait、Production内wait、固定長の盲目的sleepを
-行いません。CodeRabbit terminal、feedback、workflow run、PR label/headという状態変化をpollします。
+行いません。Production の READY/ESCALATED/FAILED、workflow run、PR label/headを先に確認し、
+CodeRabbit status と feedback は補助情報として記録します。
 
 ## Source-of-Truth preflight
 
