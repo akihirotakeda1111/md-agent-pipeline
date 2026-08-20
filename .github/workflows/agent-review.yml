@@ -1,13 +1,20 @@
 # Asynchronous CodeRabbit review. Does not wait inside agent-execute.yml.
 #
+# Wake-up is CodeRabbit terminal evidence only: check_run completed or commit
+# status. Comment events are not subscribed. Intermediate CodeRabbit replies
+# (full-review acknowledgement, summary, walkthrough, inline comments) do not
+# start this workflow. Human comments such as `@coderabbitai full review` are
+# instructions to CodeRabbit, not to this agent.
+#
 # Event payloads are wake-up signals only. The review job re-fetches the
 # Pull Request, reviews, and comments through the GitHub API, then checks
 # out pull.head.sha from that API response. Orchestrator code is loaded
 # from the repository default branch; the PR head is only the repair workspace.
+# Terminal identity is the Check / commit status, not comment body text.
 #
 # Security:
 # - pull_request_target is forbidden.
-# - Fork pull requests are skipped (YAML gate + API re-check).
+# - Fork pull requests are skipped (API re-check in prepare).
 # - persist-credentials: false on every checkout.
 # - Classifier and Codex secrets are injected only on the orchestrator step.
 # - Codex never receives REVIEW_CLASSIFIER_API_KEY or GITHUB_TOKEN.
@@ -18,8 +25,8 @@
 # - No workflow-level group. A parent workflow lock that matches the review
 #   job group deadlocks queued runs (the job waits for the workflow, the
 #   workflow waits for the job).
-# - prepare is read-only and is not serialized. Non-CodeRabbit events skip
-#   there and never take the review lock.
+# - prepare is read-only and is not serialized. Non-CodeRabbit terminal events
+#   skip there and never take the review lock.
 # - review job serializes by the API pull_number from prepare.
 #   cancel-in-progress: false queues the next review. A cancelled sibling
 #   does not prevent the remaining run from re-fetching current feedback.
@@ -59,14 +66,8 @@
 name: Agent Review
 
 on:
-  pull_request_review:
-    types: [submitted, edited]
-  pull_request_review_comment:
-    types: [created, edited]
-  issue_comment:
-    types: [created, edited]
-  # Dual transport until a live COMPLETED/SKIPPED payload locks one:
   # CodeRabbit review_progress uses check runs; commit_status uses statuses.
+  # Pending statuses are skipped in the prepare job if.
   check_run:
     types: [completed]
   status:
@@ -77,7 +78,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare review
-    if: ${{ (github.event_name == 'issue_comment' && github.event.issue.pull_request) || (github.event_name == 'pull_request_review' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request_review_comment' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'check_run' && github.event.check_run.status == 'completed') || (github.event_name == 'status') }}
+    if: ${{ (github.event_name == 'check_run' && github.event.check_run.status == 'completed') || (github.event_name == 'status' && github.event.state != 'pending') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -36,6 +36,7 @@ CHECK_ACTIVE_STATUSES = frozenset({"queued", "in_progress", "waiting", "pending"
 STATUS_SUCCESS = "success"
 STATUS_FAILED_STATES = frozenset({"failure", "error"})
 STATUS_PENDING = "pending"
+TERMINAL_STATUS_STATES = frozenset({"success", "failure", "error"})
 
 
 class CodeRabbitTerminalKind(StrEnum):
@@ -114,6 +115,18 @@ def has_coderabbit_event_identity(payload: dict[str, Any], cfg: CodeRabbitConfig
     context = payload.get("context")
     if isinstance(context, str) and status_context_matches(context, cfg.status_context):
         return True
+    return False
+
+
+def is_terminal_wakeup_event(payload: dict[str, Any]) -> bool:
+    """True for completed Checks or non-pending commit statuses. Ignores comment bodies."""
+    check_run = payload.get("check_run")
+    if isinstance(check_run, dict):
+        status = str(check_run.get("status") or "").strip().lower()
+        return status == "completed"
+    state = payload.get("state")
+    if isinstance(state, str):
+        return state.strip().lower() in TERMINAL_STATUS_STATES
     return False
 
 

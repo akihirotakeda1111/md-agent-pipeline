@@ -11,11 +11,13 @@ from .models import (
     EnvironmentBlocker,
     ExternalServiceBlocker,
     FeedbackEvidence,
+    ProductionBug,
     PullRequestEvidence,
     RunEvidence,
     WorkflowInfo,
 )
 from .process import CommandError, run
+from .workflow import COMMENT_REVIEW_EVENTS
 
 
 ACTIVE_RUN_STATUSES = frozenset(
@@ -200,6 +202,44 @@ class GitHub:
                 "observed_new_runs": observed,
             },
         )
+
+    def wait_without_comment_review_run(
+        self,
+        workflow_id: int,
+        baseline_ids: set[int],
+        *,
+        timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + timeout_seconds
+        observed: list[dict[str, Any]] = []
+        while time.monotonic() < deadline:
+            observed = [
+                item
+                for item in self.list_workflow_runs(workflow_id)
+                if int(item["id"]) not in baseline_ids
+            ]
+            comment_runs = [
+                item
+                for item in observed
+                if str(item.get("event") or "") in COMMENT_REVIEW_EVENTS
+            ]
+            if comment_runs:
+                raise ProductionBug(
+                    "Agent Review started from a comment event",
+                    evidence={
+                        "runs": [
+                            {
+                                "id": item.get("id"),
+                                "event": item.get("event"),
+                                "html_url": item.get("html_url"),
+                                "display_title": item.get("display_title"),
+                            }
+                            for item in comment_runs
+                        ]
+                    },
+                )
+            time.sleep(self.poll_seconds)
+        return observed
 
     def wait_attempt(self, run_id: int, timeout_seconds: int) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
@@ -549,47 +589,18 @@ class GitHub:
         self,
         number: int,
         *,
-        supported_events: tuple[str, ...],
-        head_sha: str,
-        generated_file: str,
+        supported_events: tuple[str, ...] = (),
+        head_sha: str = "",
+        generated_file: str = "",
         marker: str,
     ) -> dict[str, Any]:
-        if "issue_comment" in supported_events:
-            item = self.api(
-                f"repos/{self.repo}/issues/{number}/comments",
-                method="POST",
-                payload={"body": marker},
-            )
-            return {"event": "issue_comment", "kind": "issue_comment", "id": item.get("id")}
-        if "pull_request_review_comment" in supported_events:
-            item = self.api(
-                f"repos/{self.repo}/pulls/{number}/comments",
-                method="POST",
-                payload={
-                    "body": marker,
-                    "commit_id": head_sha,
-                    "path": generated_file,
-                    "line": 1,
-                    "side": "RIGHT",
-                },
-            )
-            return {
-                "event": "pull_request_review_comment",
-                "kind": "review_comment",
-                "id": item.get("id"),
-            }
-        if "pull_request_review" in supported_events:
-            item = self.api(
-                f"repos/{self.repo}/pulls/{number}/reviews",
-                method="POST",
-                payload={"body": marker, "event": "COMMENT", "commit_id": head_sha},
-            )
-            return {
-                "event": "pull_request_review",
-                "kind": "review",
-                "id": item.get("id"),
-            }
-        raise RuntimeError("review workflow exposes no safe event for Scenario B")
+        del supported_events, head_sha, generated_file
+        item = self.api(
+            f"repos/{self.repo}/issues/{number}/comments",
+            method="POST",
+            payload={"body": marker},
+        )
+        return {"event": "issue_comment", "kind": "issue_comment", "id": item.get("id")}
 
     def close_pr(self, number: int) -> None:
         self.api(f"repos/{self.repo}/pulls/{number}", method="PATCH", fields={"state": "closed"})

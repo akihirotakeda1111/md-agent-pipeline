@@ -44,9 +44,9 @@ review-integration/
 ## Production 経路
 
 ```text
-GitHub event（wake-up のみ）
+GitHub event（CodeRabbit terminal wake-up のみ: check_run completed / status）
   -> prepare_review
-       actor / PR identity / work-unit / fork / HEAD 再取得
+       terminal event / CodeRabbit identity / PR identity / work-unit / fork / HEAD 再取得
   -> run_review
        collect CodeRabbit terminal on current HEAD (Checks + commit statuses)
        SKIPPED / failure family -> ESCALATED (classifier / Codex / git write なし)

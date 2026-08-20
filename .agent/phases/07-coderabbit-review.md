@@ -70,20 +70,32 @@ ACTIONABLE?
 
 ## Event Verification
 
-実装時にCodeRabbitが実際に生成するGitHub Event形式を確認する。
+Phase 7 Agent Review の本処理は、CodeRabbit レビューが terminal になったときだけ起動する。
 
-候補:
+正式な wake-up:
 
 ```text
-pull_request_review
-pull_request_review_comment
-issue_comment
+check_run  (types: completed)
+status     (pending は prepare で skip)
 ```
 
-必要なeventだけ採用する。
+コメント系は起動条件から除外する。
 
-Event payloadはwake-up signalとして使い、
-レビュー全体をpayloadだけから判断しない。
+```text
+issue_comment
+pull_request_review_comment
+pull_request_review
+```
+
+`@coderabbitai full review` は CodeRabbit への指示であり、Agent Review の wake-up ではない。
+full review 受付応答、summary / walkthrough、途中レビューコメントでも起動しない。
+
+terminal 判定はコメント本文（例: `Full review finished.`）を解析しない。
+Check Run の `status=completed` と commit status の非 pending `state` を使う。
+
+Event payload は wake-up signal のみ。起動後に GitHub API から current HEAD の
+review / comment と CodeRabbit terminal evidence を再取得し、その後に
+Classifier → Policy → Codex / READY / ESCALATED を実行する。
 
 ---
 

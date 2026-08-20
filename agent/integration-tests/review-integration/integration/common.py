@@ -40,7 +40,7 @@ def processed_record(feedback: dict[str, Any]) -> dict[str, Any]:
 
 def request(spec_path: Path, repo: GitRepo, **event_overrides: Any) -> ReviewRunRequest:
     event_data = {
-        "event_name": "pull_request_review_comment",
+        "event_name": "check_run",
         "actor": BOT,
         "pr_number": PR_NUMBER,
         "head_sha": repo.head,

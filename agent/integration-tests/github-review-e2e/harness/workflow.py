@@ -134,17 +134,22 @@ COMMENT_REVIEW_EVENTS = frozenset(
     {"pull_request_review", "pull_request_review_comment", "issue_comment"}
 )
 TERMINAL_REVIEW_EVENTS = frozenset({"check_run", "status"})
-SUPPORTED_REVIEW_EVENTS = COMMENT_REVIEW_EVENTS | TERMINAL_REVIEW_EVENTS
+SUPPORTED_REVIEW_EVENTS = TERMINAL_REVIEW_EVENTS
 
 
 def review_event_names(workflow: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(name for name in triggers(workflow) if name in SUPPORTED_REVIEW_EVENTS)
+    available = triggers(workflow)
+    return tuple(name for name in ("check_run", "status") if name in available)
 
 
 def assert_review_workflow_contract(workflow: dict[str, Any]) -> tuple[str, ...]:
+    available = set(triggers(workflow))
+    comment_events = sorted(available & COMMENT_REVIEW_EVENTS)
+    if comment_events:
+        raise ProductionBug(
+            "agent-review.yml must not start from comment events: " + ", ".join(comment_events)
+        )
     events = review_event_names(workflow)
-    if not (set(events) & COMMENT_REVIEW_EVENTS):
-        raise ProductionBug("agent-review.yml has no supported asynchronous review event")
     missing_terminal = sorted(TERMINAL_REVIEW_EVENTS - set(events))
     if missing_terminal:
         raise ProductionBug(

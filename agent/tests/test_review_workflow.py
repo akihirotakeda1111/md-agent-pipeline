@@ -21,16 +21,10 @@ def _load(path: Path) -> tuple[dict[object, object], dict[object, object]]:
 def test_review_workflow_uses_async_github_events() -> None:
     payload, triggers = _load(WORKFLOW)
     assert payload["name"] == "Agent Review"
-    assert set(triggers) >= {
-        "pull_request_review",
-        "pull_request_review_comment",
-        "issue_comment",
-        "check_run",
-        "status",
-    }
-    assert triggers["pull_request_review"]["types"] == ["submitted", "edited"]
-    assert triggers["pull_request_review_comment"]["types"] == ["created", "edited"]
-    assert triggers["issue_comment"]["types"] == ["created", "edited"]
+    assert set(triggers) == {"check_run", "status"}
+    assert "issue_comment" not in triggers
+    assert "pull_request_review" not in triggers
+    assert "pull_request_review_comment" not in triggers
     assert triggers["check_run"]["types"] == ["completed"]
     assert triggers["status"] is None or triggers["status"] == {}
     assert "pull_request_target" not in triggers
@@ -44,7 +38,11 @@ def test_review_workflow_skips_forks_and_does_not_poll() -> None:
     payload, triggers = _load(WORKFLOW)
     assert "pull_request_target" not in triggers
     prepare = payload["jobs"]["prepare"]
-    assert "github.repository" in str(prepare["if"])
+    condition = str(prepare["if"])
+    assert "check_run" in condition
+    assert "pending" in condition
+    assert "issue_comment" not in condition
+    assert "pull_request_review" not in condition
     assert prepare["permissions"] == {
         "contents": "read",
         "pull-requests": "read",

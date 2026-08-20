@@ -162,6 +162,27 @@ def _pull(repo: Path, spec) -> dict:
     }
 
 
+def _check_run_event(
+    repo: Path,
+    *,
+    actor: str = ACTOR,
+    slug: str = "coderabbitai",
+    pull_number: int = 7,
+    status: str = "completed",
+    conclusion: str = "success",
+) -> dict:
+    return {
+        "sender": {"login": actor},
+        "check_run": {
+            "head_sha": head_sha(repo),
+            "status": status,
+            "conclusion": conclusion,
+            "app": {"slug": slug},
+            "pull_requests": [{"number": pull_number}],
+        },
+    }
+
+
 def _comment(
     *,
     source_id: int = 11,
@@ -432,7 +453,7 @@ def test_prepare_skips_non_configured_actor(tmp_path: Path) -> None:
     fake = FakeGithub(_pull(repo, spec))
     result = prepare_review(
         repo_root=repo,
-        event_payload={"sender": {"login": "human"}, "pull_request": {"number": 7}},
+        event_payload=_check_run_event(repo, actor="human", slug="github-actions"),
         repository="octo/repo",
         github=fake.client(),
     )
@@ -440,6 +461,77 @@ def test_prepare_skips_non_configured_actor(tmp_path: Path) -> None:
     assert "configured CodeRabbit actor" in result.reason
     assert result.coderabbit_actor == load_config().coderabbit.actor
     assert result.to_output_map()["coderabbit_actor"] == load_config().coderabbit.actor
+
+
+def test_prepare_skips_comment_event(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "action": "created",
+            "sender": {"login": ACTOR},
+            "issue": {"number": 7, "pull_request": {}},
+            "comment": {"body": "Full review finished."},
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "terminal" in result.reason
+
+
+def test_prepare_skips_human_full_review_instruction(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "action": "created",
+            "sender": {"login": "human"},
+            "issue": {"number": 7, "pull_request": {}},
+            "comment": {"body": "@coderabbitai full review"},
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "terminal" in result.reason
+
+
+def test_prepare_skips_pending_status(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    result = prepare_review(
+        repo_root=repo,
+        event_payload={
+            "sender": {"login": ACTOR},
+            "sha": head_sha(repo),
+            "context": "CodeRabbit",
+            "state": "pending",
+        },
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "terminal" in result.reason
+
+
+def test_prepare_skips_in_progress_check_run(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    result = prepare_review(
+        repo_root=repo,
+        event_payload=_check_run_event(repo, status="in_progress", conclusion=""),
+        repository="octo/repo",
+        github=fake.client(),
+    )
+    assert result.should_review is False
+    assert "terminal" in result.reason
 
 
 def test_prepare_skips_fork_pull_request(tmp_path: Path) -> None:
@@ -450,7 +542,7 @@ def test_prepare_skips_fork_pull_request(tmp_path: Path) -> None:
     fake = FakeGithub(pull)
     result = prepare_review(
         repo_root=repo,
-        event_payload={"sender": {"login": ACTOR}, "pull_request": {"number": 7}},
+        event_payload=_check_run_event(repo),
         repository="octo/repo",
         github=fake.client(),
     )
@@ -466,7 +558,7 @@ def test_prepare_skips_pull_number_mismatch(tmp_path: Path) -> None:
     fake = FakeGithub(pull)
     result = prepare_review(
         repo_root=repo,
-        event_payload={"sender": {"login": ACTOR}, "pull_request": {"number": 7}},
+        event_payload=_check_run_event(repo),
         repository="octo/repo",
         github=fake.client(),
     )
@@ -482,7 +574,7 @@ def test_prepare_resolves_spec_from_api_head_not_checkout_tree(tmp_path: Path) -
     fake = FakeGithub(_pull(repo, spec), files=files)
     result = prepare_review(
         repo_root=repo,
-        event_payload={"sender": {"login": ACTOR}, "pull_request": {"number": 7}},
+        event_payload=_check_run_event(repo),
         repository="octo/repo",
         github=fake.client(),
     )

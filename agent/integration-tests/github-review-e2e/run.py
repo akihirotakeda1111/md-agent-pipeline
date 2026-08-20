@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from harness.assertions import (
+    assert_comment_did_not_start_review,
     assert_execute_run,
     assert_linear_head_change,
-    assert_non_coderabbit_short_circuit,
     assert_pr,
     assert_pr_scope,
     assert_review_run,
@@ -565,32 +565,24 @@ def main() -> int:
                 }
             )
 
-            # Scenario B uses a real GitHub event from the harness user. Production must
-            # reject it before classifier/Codex while preserving the converged PR.
+            # Scenario B posts a human PR comment. That is an instruction to
+            # CodeRabbit or a no-op for Agent Review; it must not start this workflow.
             b_baseline = github.workflow_run_ids(review_workflow.id)
             b_head = current_head
             b_state = scenario_a_state
             marker = f"<!-- phase7-e2e-non-coderabbit:{suffix} -->"
             wakeup = github.create_non_coderabbit_wakeup(
                 pr.number,
-                supported_events=review_events,
-                head_sha=b_head,
-                generated_file=scenario.generated_file,
                 marker=marker,
             )
-            b_raw = github.wait_new_review_run(
+            observed_b = github.wait_without_comment_review_run(
                 review_workflow.id,
                 b_baseline,
                 timeout_seconds=args.discovery_timeout_seconds,
-                event=str(wakeup["event"]),
-                actor=viewer_login,
-                correlation_text=suffix,
             )
-            b_data = github.wait_attempt(int(b_raw["id"]), args.review_timeout_seconds)
-            b_run = github.run_evidence(b_data)
-            assert_non_coderabbit_short_circuit(b_run, configured_actor)
+            assert_comment_did_not_start_review(observed_b)
             after_b = github.pr_evidence(pr.number)
-            assert after_b.head_sha == b_head, "non-CodeRabbit wake-up changed PR HEAD"
+            assert after_b.head_sha == b_head, "human comment changed PR HEAD"
             assert terminal_state(after_b) == b_state
             after_terminal = github.coderabbit_terminal(
                 after_b.head_sha,
@@ -604,7 +596,15 @@ def main() -> int:
                     "status": "PASS",
                     "wakeup": wakeup,
                     "actor": viewer_login,
-                    "run": run_dict(b_run),
+                    "run": None,
+                    "observed_runs": [
+                        {
+                            "id": item.get("id"),
+                            "event": item.get("event"),
+                            "html_url": item.get("html_url"),
+                        }
+                        for item in observed_b
+                    ],
                     "head_before": b_head,
                     "head_after": after_b.head_sha,
                     "terminal_state_after": terminal_state(after_b),

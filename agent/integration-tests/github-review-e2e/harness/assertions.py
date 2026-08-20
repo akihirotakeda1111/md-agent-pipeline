@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from .models import PullRequestEvidence, RunEvidence, Scenario, WorkflowInfo
 
@@ -74,10 +75,12 @@ def assert_review_run(
     run: RunEvidence, *, configured_actor: str, supported_events: tuple[str, ...]
 ) -> None:
     assert run.event in supported_events
-    if run.event in {"pull_request_review", "pull_request_review_comment", "issue_comment"}:
-        assert run.actor == configured_actor, (
-            f"review workflow actor {run.actor!r} does not match configured actor {configured_actor!r}"
-        )
+    assert run.event not in {
+        "pull_request_review",
+        "pull_request_review_comment",
+        "issue_comment",
+    }
+    assert configured_actor
     assert run.conclusion in {"success", "failure"}, (
         f"review workflow conclusion: {run.conclusion}"
     )
@@ -87,25 +90,18 @@ def assert_review_run(
     assert len(review) == 1 and review[0][1] in {"success", "failure"}, f"review job: {review}"
 
 
-def assert_non_coderabbit_short_circuit(run: RunEvidence, configured_actor: str) -> None:
-    assert run.actor != configured_actor
-    assert run.conclusion == "success", f"negative actor workflow conclusion: {run.conclusion}"
-    prepare = _matching_jobs(run, "prepare review")
-    review = _matching_jobs(run, "review and repair")
-    assert len(prepare) == 1 and prepare[0][1] == "success", f"prepare job: {prepare}"
-    assert not review or all(conclusion == "skipped" for _, conclusion in review), (
-        f"review job must not run for non-CodeRabbit actor: {review}"
-    )
-    forbidden_events = {
-        "REVIEW_COLLECTED",
-        "REVIEW_CLASSIFIED",
-        "REVIEW_POLICY_APPLIED",
-        "REVIEW_FIX_STARTED",
-        "REVIEW_FIX_VALIDATION_PASSED",
-    }
-    assert not forbidden_events.intersection(run.events), (
-        f"non-CodeRabbit wake-up crossed the semantic/review boundary: {run.events}"
-    )
+def assert_comment_did_not_start_review(runs: list[dict[str, Any]]) -> None:
+    forbidden = {"pull_request_review", "pull_request_review_comment", "issue_comment"}
+    started = [
+        {
+            "id": item.get("id"),
+            "event": item.get("event"),
+            "html_url": item.get("html_url"),
+        }
+        for item in runs
+        if str(item.get("event") or "") in forbidden
+    ]
+    assert not started, f"Agent Review started from a comment event: {started}"
 
 
 def terminal_state(pr: PullRequestEvidence) -> str | None:

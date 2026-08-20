@@ -4,6 +4,7 @@ from agent.config import load_config
 from agent.review_terminal import (
     CodeRabbitTerminalKind,
     has_coderabbit_event_identity,
+    is_terminal_wakeup_event,
     resolve_coderabbit_terminal,
 )
 
@@ -210,4 +211,32 @@ def test_event_identity_accepts_check_app_without_actor() -> None:
     assert not has_coderabbit_event_identity(
         {"sender": {"login": "human"}, "check_run": {"app": {"slug": "other"}}},
         cfg,
+    )
+
+
+def test_terminal_wakeup_ignores_comment_payloads() -> None:
+    assert not is_terminal_wakeup_event(
+        {
+            "sender": {"login": "coderabbitai[bot]"},
+            "comment": {"body": "Full review finished."},
+            "issue": {"number": 7, "pull_request": {}},
+        }
+    )
+    assert not is_terminal_wakeup_event(
+        {
+            "sender": {"login": "human"},
+            "comment": {"body": "@coderabbitai full review"},
+            "issue": {"number": 7, "pull_request": {}},
+        }
+    )
+    assert not is_terminal_wakeup_event(
+        {"sender": {"login": "coderabbitai[bot]"}, "state": "pending", "context": "CodeRabbit"}
+    )
+    assert is_terminal_wakeup_event(
+        {"check_run": {"status": "completed", "conclusion": "success"}}
+    )
+    assert is_terminal_wakeup_event({"state": "success", "context": "CodeRabbit"})
+    assert is_terminal_wakeup_event({"state": "failure", "context": "CodeRabbit"})
+    assert not is_terminal_wakeup_event(
+        {"check_run": {"status": "in_progress", "conclusion": ""}}
     )

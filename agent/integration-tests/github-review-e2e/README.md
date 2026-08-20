@@ -100,22 +100,22 @@ Polling は次の順です。
 
 Scenario Aで Production が `FAILED` へ到達した場合は証拠を report へ保存し、この acceptance は FAIL です。内容を固定してCodeRabbitを誘導する workaroundは追加しません。
 
-### Scenario B — Non-CodeRabbit actor fail-closed
+### Scenario B — Human comment does not start Agent Review
 
-Scenario Aの同じPRへ、Harnessの実GitHub userから通常comment/reviewを1件投稿します。
-Production workflowが購読する実eventのうち、`issue_comment`、inline review comment、PR reviewの
-順で安全に利用可能なものを選びます。
+Scenario Aの同じPRへ、Harnessの実GitHub userから通常commentを1件投稿します。
+`@coderabbitai full review` を含む人間コメントは CodeRabbit への指示であり、
+`agent-review.yml` の起動条件ではありません。
 
 ```text
-real non-CodeRabbit GitHub event
--> agent-review.yml prepare
--> actor mismatch
--> review job skipped
+real human GitHub comment
+-> agent-review.yml は issue_comment / review comment を購読しない
+-> Agent Review は起動しない
 -> classifierなし / Codexなし / pushなし
 -> Scenario A の Production terminal state と HEAD を維持
 ```
 
-これはReal external serviceを不自然に改変せず、安全に再現できるintegration contract R02相当です。
+途中で coincidental な `check_run` / `status` が走っても Scenario B の失敗にはしません。
+コメント event で Agent Review が起動したら ProductionBug です。
 投稿物はE2E PR内に閉じ、default cleanupでPRと一緒に閉じます。
 
 ## 4. Real / Fake boundary
@@ -260,7 +260,7 @@ python agent/integration-tests/github-review-e2e/run.py `
 - CodeRabbit feedback kind/id/actor/path/head association（本文は保存しない）
 - repair前後SHA、linear comparison、incremental review evidence
 - terminal labels/state、tracking comment ID、PR count、merge/auto-merge状態
-- Scenario B actor/run/head preservation
+- Scenario B human comment does not start Agent Review; HEAD/state preservation
 - cleanup結果
 
 回避ロジックは入れず、failureを次のいずれかに分類します。

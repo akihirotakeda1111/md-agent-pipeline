@@ -15,9 +15,9 @@ if "yaml" not in sys.modules:
 
 import run as runner
 from harness.assertions import (
+    assert_comment_did_not_start_review,
     assert_execute_run,
     assert_linear_head_change,
-    assert_non_coderabbit_short_circuit,
     assert_pr,
     assert_pr_scope,
     assert_review_run,
@@ -89,7 +89,6 @@ class HarnessTests(unittest.TestCase):
     def test_review_workflow_contract_is_async_and_bounded(self) -> None:
         workflow = {
             "on": {
-                "issue_comment": {"types": ["created"]},
                 "check_run": {"types": ["completed"]},
                 "status": None,
             },
@@ -105,13 +104,12 @@ class HarnessTests(unittest.TestCase):
         }
         self.assertEqual(
             assert_review_workflow_contract(workflow),
-            ("issue_comment", "check_run", "status"),
+            ("check_run", "status"),
         )
 
     def test_review_workflow_contract_rejects_workflow_level_concurrency(self) -> None:
         workflow = {
             "on": {
-                "issue_comment": {"types": ["created"]},
                 "check_run": {"types": ["completed"]},
                 "status": None,
             },
@@ -134,6 +132,26 @@ class HarnessTests(unittest.TestCase):
             "on": {"issue_comment": {"types": ["created"]}},
             "concurrency": {"group": "agent-review-pr", "cancel-in-progress": False},
             "jobs": {},
+        }
+        with self.assertRaises(ProductionBug):
+            assert_review_workflow_contract(workflow)
+
+    def test_review_workflow_contract_rejects_comment_wakeups(self) -> None:
+        workflow = {
+            "on": {
+                "issue_comment": {"types": ["created"]},
+                "check_run": {"types": ["completed"]},
+                "status": None,
+            },
+            "jobs": {
+                "prepare": {},
+                "review": {
+                    "concurrency": {
+                        "group": "${{ github.workflow }}-${{ needs.prepare.outputs.pull_number }}",
+                        "cancel-in-progress": False,
+                    }
+                },
+            },
         }
         with self.assertRaises(ProductionBug):
             assert_review_workflow_contract(workflow)
@@ -243,22 +261,7 @@ class HarnessTests(unittest.TestCase):
 
     def test_review_and_negative_actor_run_boundaries(self) -> None:
         actor = "configured-review-bot"
-        review = RunEvidence(
-            11,
-            1,
-            "https://example.invalid/runs/11",
-            "b" * 40,
-            self.scenario.target_branch,
-            "issue_comment",
-            actor,
-            "completed",
-            "success",
-            {"Prepare review": "success", "Review and repair": "success"},
-            ("REVIEW_RECEIVED", "REVIEW_CLASSIFIED"),
-        )
-        assert_review_run(
-            review, configured_actor=actor, supported_events=("issue_comment", "check_run")
-        )
+        events = ("check_run", "status")
         check_run = RunEvidence(
             13,
             1,
@@ -272,9 +275,7 @@ class HarnessTests(unittest.TestCase):
             {"Prepare review": "success", "Review and repair": "success"},
             ("REVIEW_RECEIVED", "READY_FOR_HUMAN"),
         )
-        assert_review_run(
-            check_run, configured_actor=actor, supported_events=("issue_comment", "check_run")
-        )
+        assert_review_run(check_run, configured_actor=actor, supported_events=events)
         escalated = RunEvidence(
             14,
             1,
@@ -288,23 +289,15 @@ class HarnessTests(unittest.TestCase):
             {"Prepare review": "success", "Review and repair": "failure"},
             ("REVIEW_RECEIVED", "REVIEW_ESCALATED"),
         )
-        assert_review_run(
-            escalated, configured_actor=actor, supported_events=("issue_comment", "check_run")
-        )
-        negative = RunEvidence(
-            12,
-            1,
-            "https://example.invalid/runs/12",
-            "b" * 40,
-            "main",
-            "issue_comment",
-            "human",
-            "completed",
-            "success",
-            {"Prepare review": "success", "Review and repair": "skipped"},
-            (),
-        )
-        assert_non_coderabbit_short_circuit(negative, actor)
+        assert_review_run(escalated, configured_actor=actor, supported_events=events)
+        comment_run = {
+            "id": 12,
+            "event": "issue_comment",
+            "html_url": "https://example.invalid/runs/12",
+        }
+        with self.assertRaises(AssertionError):
+            assert_comment_did_not_start_review([comment_run])
+        assert_comment_did_not_start_review([{"id": 15, "event": "check_run"}])
 
     def test_terminal_state_and_linear_comparison_are_observable_only(self) -> None:
         pr = PullRequestEvidence(

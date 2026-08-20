@@ -34,6 +34,7 @@ from agent.review_track import (
 )
 from agent.spec import parse_spec
 
+from .common import BOT
 from .harness.adapters import ReviewRunRequest, ReviewRunResult, ServiceBundle
 from .harness.fake_github import FakeGitHub
 from .harness.observations import ObservationLog
@@ -379,10 +380,17 @@ def _seed_tracking(fake: FakeGitHub, *, spec, request: ReviewRunRequest) -> None
 
 
 def _event_payload(request: ReviewRunRequest) -> dict[str, Any]:
+    actor = request.event.actor
+    slug = "coderabbitai" if actor == BOT else "github-actions"
     return {
-        "action": "created",
-        "sender": {"login": request.event.actor},
-        "pull_request": {"number": request.event.pr_number},
+        "sender": {"login": actor},
+        "check_run": {
+            "head_sha": request.event.head_sha,
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"slug": slug},
+            "pull_requests": [{"number": request.event.pr_number}],
+        },
     }
 
 

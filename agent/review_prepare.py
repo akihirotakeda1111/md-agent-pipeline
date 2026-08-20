@@ -16,6 +16,7 @@ from agent.spec import TaskSpec, parse_spec, parse_spec_text
 from agent.review_terminal import (
     event_commit_sha,
     has_coderabbit_event_identity,
+    is_terminal_wakeup_event,
 )
 
 
@@ -194,6 +195,12 @@ def prepare_review(
     def skip(**kwargs: Any) -> ReviewPrepareResult:
         return _skip(coderabbit_actor=actor, **kwargs)
 
+    if not is_terminal_wakeup_event(event_payload):
+        number = pull_number_from_event(event_payload)
+        return skip(
+            pull_number=number or 0,
+            reason="event is not a CodeRabbit terminal wake-up",
+        )
     if not has_coderabbit_event_identity(event_payload, cfg.coderabbit):
         number = pull_number_from_event(event_payload)
         return skip(

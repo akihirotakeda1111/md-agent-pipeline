@@ -20,17 +20,11 @@ def workflow_triggers(workflow):
 
 def test_review_is_a_separate_async_workflow(production_root):
     workflow = review_workflow(production_root)
-    trigger_text = scalar_text(workflow_triggers(workflow)).lower()
-    assert any(
-        name in trigger_text
-        for name in (
-            "pull_request_review",
-            "pull_request_review_comment",
-            "issue_comment",
-            "check_run",
-            "status",
-        )
-    )
+    triggers = workflow_triggers(workflow)
+    assert "check_run" in triggers
+    assert "status" in triggers
+    for name in ("issue_comment", "pull_request_review", "pull_request_review_comment"):
+        assert name not in triggers
     body = scalar_text(workflow).lower()
     assert "sleep " not in body
     assert "while true" not in body
