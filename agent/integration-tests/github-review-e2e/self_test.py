@@ -32,8 +32,25 @@ from harness.coderabbit_terminal import (
     resolve_coderabbit_terminal,
 )
 from harness.git import GitRepository
-from harness.github import GitHub
+from harness.github import (
+    GitHub,
+    CANDIDATE_OTHER_PR,
+    CANDIDATE_PREPARE_FAILED,
+    CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
+    CANDIDATE_PREPARE_SKIPPED,
+    CANDIDATE_REVIEW_EXECUTED,
+    CANDIDATE_REVIEW_PENDING,
+    CANDIDATE_STALE_HEAD,
+    candidate_evidence_row,
+    choose_unseen_review_run,
+    classify_terminal_wake_candidate,
+    completed_review_run_for_terminal,
+    new_terminal_wake_runs,
+    prepare_binds_to_target_pr,
+    raise_if_prepare_fault,
+)
 from harness.models import (
+    EnvironmentBlocker,
     ProductionBug,
     PullRequestEvidence,
     RunEvidence,
@@ -469,6 +486,433 @@ class HarnessTests(unittest.TestCase):
         self.assertIn("production_terminal_outcome", runner_source)
         self.assertNotIn("KIND_COMPLETED", runner_source)
         self.assertNotIn("KIND_SKIPPED", runner_source)
+
+    def test_review_run_correlation_uses_prepare_not_run_head_or_title(self) -> None:
+        wait_source = inspect.getsource(GitHub.wait_for_scenario_a_signal)
+        classify_source = inspect.getsource(classify_terminal_wake_candidate)
+        helper_source = inspect.getsource(prepare_binds_to_target_pr)
+        runner_source = inspect.getsource(runner)
+        combined = wait_source + classify_source + helper_source
+        self.assertNotIn("correlation_text", combined)
+        self.assertNotIn("display_title", combined)
+        self.assertNotIn("correlation_text", runner_source)
+        self.assertIn("pull_number", helper_source)
+        self.assertIn("head_sha", helper_source)
+        self.assertIn("review_baseline", runner_source)
+        self.assertIn("seen_ids", wait_source)
+        self.assertIn("raise_if_prepare_fault", wait_source)
+        timeout_source = inspect.getsource(GitHub.scenario_a_timeout_evidence)
+        self.assertIn("candidate_runs", timeout_source)
+        self.assertIn("prepare_results", timeout_source)
+        self.assertIn("check_run_status_history", timeout_source)
+
+    def test_prepare_output_binds_pr_even_when_run_head_is_default_branch(self) -> None:
+        pr_head = "b" * 40
+        default_branch = "c" * 40
+        prepare = {
+            "should_review": True,
+            "pull_number": 19,
+            "head_sha": pr_head,
+            "reason": "ok",
+        }
+        self.assertTrue(
+            prepare_binds_to_target_pr(prepare, pr_number=19, head_sha=pr_head)
+        )
+        self.assertFalse(
+            prepare_binds_to_target_pr(
+                {"should_review": True, "pull_number": 19, "head_sha": default_branch},
+                pr_number=19,
+                head_sha=pr_head,
+            )
+        )
+        runs = [
+            {"id": 99, "event": "status", "head_sha": default_branch},
+            {"id": 2, "event": "status", "head_sha": default_branch},
+            {"id": 3, "event": "check_run", "head_sha": default_branch},
+            {"id": 4, "event": "issue_comment", "head_sha": pr_head},
+        ]
+        candidates = new_terminal_wake_runs(runs, {99})
+        self.assertEqual([int(item["id"]) for item in candidates], [2, 3])
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare=prepare,
+                jobs={"Prepare review": "success", "Review and repair": "success"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=pr_head,
+            ),
+            CANDIDATE_REVIEW_EXECUTED,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": False,
+                    "pull_number": 19,
+                    "head_sha": pr_head,
+                    "reason": "event sha is not the current pull head",
+                },
+                jobs={"Prepare review": "success", "Review and repair": "skipped"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=pr_head,
+            ),
+            CANDIDATE_PREPARE_SKIPPED,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": True,
+                    "pull_number": "19",
+                    "head_sha": pr_head,
+                },
+                jobs={},
+                run_status="in_progress",
+                pr_number=19,
+                head_sha=pr_head,
+            ),
+            CANDIDATE_REVIEW_PENDING,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": True,
+                    "pull_number": 20,
+                    "head_sha": pr_head,
+                },
+                jobs={"Prepare review": "success", "Review and repair": "success"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=pr_head,
+            ),
+            CANDIDATE_OTHER_PR,
+        )
+
+    def test_prepare_failure_is_not_a_normal_skip(self) -> None:
+        current = "b" * 40
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare=None,
+                jobs={"Prepare review": "failure"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=current,
+            ),
+            CANDIDATE_PREPARE_FAILED,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": False,
+                    "pull_number": 19,
+                    "head_sha": current,
+                    "reason": "event sha is not the current pull head",
+                },
+                jobs={"Prepare review": "success", "Review and repair": "skipped"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=current,
+            ),
+            CANDIDATE_PREPARE_SKIPPED,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare=None,
+                jobs={"Prepare review": "success"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=current,
+                prepare_log_error=True,
+            ),
+            CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
+        )
+        with self.assertRaises(ProductionBug) as failed:
+            raise_if_prepare_fault(
+                {
+                    "kind": CANDIDATE_PREPARE_FAILED,
+                    "id": 7,
+                    "event": "status",
+                    "jobs": {"Prepare review": "failure"},
+                }
+            )
+        self.assertEqual(failed.exception.category, "PRODUCTION_BUG")
+        with self.assertRaises(EnvironmentBlocker) as missing_logs:
+            raise_if_prepare_fault(
+                {
+                    "kind": CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
+                    "id": 8,
+                    "event": "check_run",
+                    "prepare_log_error": True,
+                    "jobs": {"Prepare review": "success"},
+                }
+            )
+        self.assertEqual(missing_logs.exception.category, "ENVIRONMENT_BLOCKER")
+        with self.assertRaises(ProductionBug):
+            raise_if_prepare_fault(
+                {
+                    "kind": CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
+                    "id": 9,
+                    "event": "status",
+                    "jobs": {"Prepare review": "success"},
+                }
+            )
+        raise_if_prepare_fault({"kind": CANDIDATE_PREPARE_SKIPPED, "id": 10})
+
+    def test_repair_head_and_old_head_terminal_are_separated(self) -> None:
+        old_head = "a" * 40
+        new_head = "b" * 40
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": True,
+                    "pull_number": 19,
+                    "head_sha": new_head,
+                    "reason": "ok",
+                },
+                jobs={"Prepare review": "success", "Review and repair": "success"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=new_head,
+            ),
+            CANDIDATE_REVIEW_EXECUTED,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": True,
+                    "pull_number": 19,
+                    "head_sha": old_head,
+                    "reason": "ok",
+                },
+                jobs={"Prepare review": "success", "Review and repair": "success"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=new_head,
+            ),
+            CANDIDATE_STALE_HEAD,
+        )
+        self.assertEqual(
+            classify_terminal_wake_candidate(
+                prepare={
+                    "should_review": False,
+                    "pull_number": 19,
+                    "head_sha": new_head,
+                    "reason": "event sha is not the current pull head",
+                },
+                jobs={"Prepare review": "success", "Review and repair": "skipped"},
+                run_status="completed",
+                pr_number=19,
+                head_sha=new_head,
+            ),
+            CANDIDATE_PREPARE_SKIPPED,
+        )
+        classified = [
+            {
+                "kind": CANDIDATE_STALE_HEAD,
+                "run": {
+                    "id": 11,
+                    "event": "status",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:00:00Z",
+                },
+            },
+            {
+                "kind": CANDIDATE_PREPARE_SKIPPED,
+                "run": {
+                    "id": 12,
+                    "event": "check_run",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:01:00Z",
+                },
+            },
+            {
+                "kind": CANDIDATE_REVIEW_EXECUTED,
+                "run": {
+                    "id": 13,
+                    "event": "status",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:02:00Z",
+                },
+            },
+        ]
+        chosen = choose_unseen_review_run(classified, seen_ids=set())
+        self.assertIsNotNone(chosen)
+        self.assertEqual(int(chosen["id"]), 13)
+        self.assertIsNone(
+            choose_unseen_review_run(classified[:2], seen_ids=set()),
+        )
+
+    def test_dual_transport_does_not_false_complete_or_miscorrelate(self) -> None:
+        current = "b" * 40
+        skip_status = {
+            "kind": CANDIDATE_PREPARE_SKIPPED,
+            "run": {
+                "id": 21,
+                "event": "status",
+                "status": "completed",
+                "created_at": "2026-08-20T00:00:00Z",
+            },
+            "prepare": {
+                "should_review": False,
+                "pull_number": 19,
+                "head_sha": current,
+                "reason": "event sha is not the current pull head",
+            },
+        }
+        review_check = {
+            "kind": CANDIDATE_REVIEW_EXECUTED,
+            "run": {
+                "id": 22,
+                "event": "check_run",
+                "status": "completed",
+                "created_at": "2026-08-20T00:01:00Z",
+                "updated_at": "2026-08-20T00:02:00Z",
+            },
+            "prepare": {
+                "should_review": True,
+                "pull_number": 19,
+                "head_sha": current,
+                "reason": "ok",
+            },
+        }
+        chosen = choose_unseen_review_run([skip_status, review_check], seen_ids=set())
+        self.assertEqual(int(chosen["id"]), 22)
+        self.assertEqual(str(chosen["event"]), "check_run")
+
+        dual_review = [
+            {
+                "kind": CANDIDATE_REVIEW_EXECUTED,
+                "run": {
+                    "id": 31,
+                    "event": "status",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:00:00Z",
+                    "updated_at": "2026-08-20T00:01:00Z",
+                },
+            },
+            {
+                "kind": CANDIDATE_REVIEW_PENDING,
+                "run": {
+                    "id": 32,
+                    "event": "check_run",
+                    "status": "in_progress",
+                    "created_at": "2026-08-20T00:00:30Z",
+                },
+            },
+        ]
+        self.assertIsNone(
+            completed_review_run_for_terminal(
+                dual_review,
+                current_head=current,
+                pr_head_sha=current,
+                terminal="READY_FOR_HUMAN",
+            )
+        )
+        self.assertEqual(
+            int(choose_unseen_review_run(dual_review, seen_ids={31})["id"]),
+            32,
+        )
+
+        dual_skip = [
+            skip_status,
+            {
+                "kind": CANDIDATE_PREPARE_SKIPPED,
+                "run": {
+                    "id": 23,
+                    "event": "check_run",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:01:00Z",
+                },
+            },
+        ]
+        self.assertIsNone(choose_unseen_review_run(dual_skip, seen_ids=set()))
+        self.assertIsNone(
+            completed_review_run_for_terminal(
+                dual_skip,
+                current_head=current,
+                pr_head_sha=current,
+                terminal="READY_FOR_HUMAN",
+            )
+        )
+        both_complete = [
+            {
+                "kind": CANDIDATE_REVIEW_EXECUTED,
+                "run": {
+                    "id": 41,
+                    "event": "status",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:00:00Z",
+                    "updated_at": "2026-08-20T00:01:00Z",
+                },
+            },
+            {
+                "kind": CANDIDATE_REVIEW_EXECUTED,
+                "run": {
+                    "id": 42,
+                    "event": "check_run",
+                    "status": "completed",
+                    "created_at": "2026-08-20T00:00:10Z",
+                    "updated_at": "2026-08-20T00:02:00Z",
+                },
+            },
+        ]
+        latest = completed_review_run_for_terminal(
+            both_complete,
+            current_head=current,
+            pr_head_sha=current,
+            terminal="READY_FOR_HUMAN",
+        )
+        self.assertEqual(int(latest["id"]), 42)
+        self.assertEqual(
+            int(choose_unseen_review_run(both_complete, seen_ids=set())["id"]),
+            41,
+        )
+
+    def test_timeout_evidence_row_includes_prepare_and_transport_fields(self) -> None:
+        row = candidate_evidence_row(
+            {
+                "id": 55,
+                "kind": CANDIDATE_PREPARE_SKIPPED,
+                "event": "status",
+                "html_url": "https://example.invalid/runs/55",
+                "status": "completed",
+                "conclusion": "success",
+                "run_head_sha": "c" * 40,
+                "prepare_log_error": False,
+                "prepare": {
+                    "should_review": False,
+                    "reason": "event sha is not the current pull head",
+                    "pull_number": 19,
+                    "head_sha": "b" * 40,
+                },
+                "jobs": {"Prepare review": "success", "Review and repair": "skipped"},
+            }
+        )
+        for key in (
+            "id",
+            "event",
+            "run_conclusion",
+            "prepare_job_conclusion",
+            "prepare_output_available",
+            "prepare_output_error",
+            "should_review",
+            "reason",
+            "pull_number",
+            "head_sha",
+        ):
+            self.assertIn(key, row)
+        self.assertEqual(row["id"], 55)
+        self.assertEqual(row["event"], "status")
+        self.assertEqual(row["run_conclusion"], "success")
+        self.assertEqual(row["prepare_job_conclusion"], "success")
+        self.assertTrue(row["prepare_output_available"])
+        self.assertFalse(row["prepare_output_error"])
+        self.assertEqual(row["should_review"], False)
+        self.assertEqual(row["reason"], "event sha is not the current pull head")
+        self.assertEqual(row["pull_number"], 19)
+        self.assertEqual(row["head_sha"], "b" * 40)
+        timeout_source = inspect.getsource(GitHub.scenario_a_timeout_evidence)
+        self.assertIn("candidate_evidence_row", timeout_source)
+        self.assertIn("check_run_status_history", timeout_source)
 
 
 if __name__ == "__main__":

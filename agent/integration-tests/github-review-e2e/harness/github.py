@@ -5,7 +5,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from .assertions import terminal_state
+from .assertions import _job_matches, terminal_state
 from .coderabbit_terminal import (
     KIND_COMPLETED,
     KIND_SKIPPED,
@@ -29,6 +29,30 @@ ACTIVE_RUN_STATUSES = frozenset(
     {"queued", "in_progress", "waiting", "pending", "requested", "waiting_for_review"}
 )
 TERMINAL_WAKE_EVENTS = frozenset({"check_run", "status"})
+CANDIDATE_PENDING_PREPARE = "pending_prepare"
+CANDIDATE_OTHER_PR = "other_pr"
+CANDIDATE_STALE_HEAD = "stale_head"
+CANDIDATE_PREPARE_SKIPPED = "prepare_skipped"
+CANDIDATE_PREPARE_FAILED = "prepare_failed"
+CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE = "prepare_output_unavailable"
+CANDIDATE_REVIEW_PENDING = "review_pending"
+CANDIDATE_REVIEW_EXECUTED = "review_executed"
+REVIEW_SIGNAL_KINDS = frozenset({CANDIDATE_REVIEW_PENDING, CANDIDATE_REVIEW_EXECUTED})
+PREPARE_FAULT_KINDS = frozenset(
+    {CANDIDATE_PREPARE_FAILED, CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE}
+)
+_STABLE_CANDIDATE_KINDS = frozenset(
+    {
+        CANDIDATE_OTHER_PR,
+        CANDIDATE_STALE_HEAD,
+        CANDIDATE_PREPARE_SKIPPED,
+        CANDIDATE_PREPARE_FAILED,
+        CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
+        CANDIDATE_REVIEW_EXECUTED,
+    }
+)
+_SKIPPED_JOB_CONCLUSIONS = frozenset({"skipped", "cancelled", "neutral"})
+_PREPARE_FAILURE_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
 
 
 def _check_app_slug(item: dict[str, Any]) -> str:
@@ -69,6 +93,216 @@ def _status_matches(item: dict[str, Any], *, actor: str, status_context: str) ->
     context_ok = isinstance(context, str) and status_context_matches(context, status_context)
     actor_ok = isinstance(login, str) and login.strip() == actor.strip()
     return context_ok or actor_ok
+
+
+def parse_prepare_pull_number(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def should_review_enabled(value: Any) -> bool:
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def prepare_binds_to_target_pr(
+    prepare: dict[str, Any] | None,
+    *,
+    pr_number: int,
+    head_sha: str,
+) -> bool:
+    if not prepare:
+        return False
+    number = parse_prepare_pull_number(prepare.get("pull_number"))
+    if number != pr_number:
+        return False
+    sha = str(prepare.get("head_sha") or "").strip().lower()
+    expected = head_sha.strip().lower()
+    return bool(sha) and bool(expected) and sha == expected
+
+
+def new_terminal_wake_runs(
+    runs: list[dict[str, Any]], baseline_ids: set[int]
+) -> list[dict[str, Any]]:
+    matched: list[dict[str, Any]] = []
+    for item in runs:
+        try:
+            run_id = int(item["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if run_id in baseline_ids:
+            continue
+        if str(item.get("event") or "") not in TERMINAL_WAKE_EVENTS:
+            continue
+        matched.append(item)
+    return matched
+
+
+def review_job_executed(jobs: dict[str, str], *, run_status: str) -> bool:
+    conclusions = [
+        str(conclusion or "")
+        for name, conclusion in jobs.items()
+        if _job_matches(name, "review and repair")
+    ]
+    if not conclusions:
+        return False
+    active = run_status in ACTIVE_RUN_STATUSES
+    for conclusion in conclusions:
+        lowered = conclusion.lower()
+        if lowered in _SKIPPED_JOB_CONCLUSIONS:
+            continue
+        if lowered in {"", "none"}:
+            return active
+        return True
+    return False
+
+
+def prepare_job_conclusion(jobs: dict[str, str]) -> str | None:
+    matches = [
+        str(conclusion or "")
+        for name, conclusion in jobs.items()
+        if _job_matches(name, "prepare review")
+    ]
+    if not matches:
+        return None
+    return matches[0]
+
+
+def _is_prepare_job_failure(conclusion: str | None) -> bool:
+    return str(conclusion or "").lower() in _PREPARE_FAILURE_CONCLUSIONS
+
+
+def classify_terminal_wake_candidate(
+    *,
+    prepare: dict[str, Any] | None,
+    jobs: dict[str, str],
+    run_status: str,
+    pr_number: int,
+    head_sha: str,
+    prepare_log_error: bool = False,
+) -> str:
+    prep_job = prepare_job_conclusion(jobs)
+    if prepare is not None:
+        number = parse_prepare_pull_number(prepare.get("pull_number"))
+        if number != pr_number:
+            return CANDIDATE_OTHER_PR
+        prepare_head = str(prepare.get("head_sha") or "").strip().lower()
+        current = head_sha.strip().lower()
+        if not prepare_head or prepare_head != current:
+            return CANDIDATE_STALE_HEAD
+        if _is_prepare_job_failure(prep_job):
+            return CANDIDATE_PREPARE_FAILED
+        if not should_review_enabled(prepare.get("should_review")):
+            return CANDIDATE_PREPARE_SKIPPED
+        if review_job_executed(jobs, run_status=run_status):
+            return CANDIDATE_REVIEW_EXECUTED
+        if run_status in ACTIVE_RUN_STATUSES:
+            return CANDIDATE_REVIEW_PENDING
+        return CANDIDATE_PREPARE_SKIPPED
+    if run_status in ACTIVE_RUN_STATUSES:
+        return CANDIDATE_PENDING_PREPARE
+    if not jobs:
+        return CANDIDATE_PENDING_PREPARE
+    if _is_prepare_job_failure(prep_job):
+        return CANDIDATE_PREPARE_FAILED
+    if str(prep_job or "").lower() in _SKIPPED_JOB_CONCLUSIONS:
+        return CANDIDATE_PREPARE_SKIPPED
+    if prepare_log_error or str(prep_job or "").lower() == "success":
+        return CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE
+    return CANDIDATE_PENDING_PREPARE
+
+
+def review_runs_from_classified(classified: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item["run"]
+        for item in classified
+        if item.get("kind") in REVIEW_SIGNAL_KINDS and isinstance(item.get("run"), dict)
+    ]
+
+
+def choose_unseen_review_run(
+    classified: list[dict[str, Any]], *, seen_ids: set[int]
+) -> dict[str, Any] | None:
+    unseen = [
+        item
+        for item in review_runs_from_classified(classified)
+        if int(item["id"]) not in seen_ids
+    ]
+    if not unseen:
+        return None
+    return sorted(unseen, key=lambda item: str(item.get("created_at") or ""))[0]
+
+
+def completed_review_run_for_terminal(
+    classified: list[dict[str, Any]],
+    *,
+    current_head: str,
+    pr_head_sha: str,
+    terminal: str | None,
+) -> dict[str, Any] | None:
+    review_runs = review_runs_from_classified(classified)
+    active = [
+        item for item in review_runs if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
+    ]
+    if pr_head_sha != current_head or active:
+        return None
+    completed = [
+        item for item in review_runs if str(item.get("status") or "") == "completed"
+    ]
+    if terminal not in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"} or not completed:
+        return None
+    return sorted(
+        completed,
+        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+    )[-1]
+
+
+def raise_if_prepare_fault(snapshot: dict[str, Any]) -> None:
+    kind = snapshot.get("kind")
+    if kind not in PREPARE_FAULT_KINDS:
+        return
+    evidence = {"candidate": candidate_evidence_row(snapshot)}
+    if kind == CANDIDATE_PREPARE_FAILED:
+        raise ProductionBug("Agent Review prepare job failed", evidence=evidence)
+    if snapshot.get("prepare_log_error"):
+        raise EnvironmentBlocker(
+            "could not read Agent Review prepare output from workflow logs",
+            evidence=evidence,
+        )
+    raise ProductionBug(
+        "Agent Review prepare completed without usable JSON output",
+        evidence=evidence,
+    )
+
+
+def candidate_evidence_row(snapshot: dict[str, Any]) -> dict[str, Any]:
+    run = snapshot.get("run") if isinstance(snapshot.get("run"), dict) else {}
+    prepare = snapshot.get("prepare") if isinstance(snapshot.get("prepare"), dict) else None
+    jobs = snapshot.get("jobs") if isinstance(snapshot.get("jobs"), dict) else {}
+    return {
+        "id": snapshot.get("id") if snapshot.get("id") is not None else run.get("id"),
+        "event": snapshot.get("event") or run.get("event"),
+        "html_url": snapshot.get("html_url") or run.get("html_url"),
+        "run_status": snapshot.get("status") or run.get("status"),
+        "run_conclusion": (
+            snapshot.get("conclusion") if "conclusion" in snapshot else run.get("conclusion")
+        ),
+        "prepare_job_conclusion": prepare_job_conclusion(jobs),
+        "prepare_output_available": prepare is not None,
+        "prepare_output_error": bool(snapshot.get("prepare_log_error")),
+        "should_review": None if prepare is None else prepare.get("should_review"),
+        "reason": None if prepare is None else prepare.get("reason"),
+        "pull_number": None if prepare is None else prepare.get("pull_number"),
+        "head_sha": None if prepare is None else prepare.get("head_sha"),
+        "run_head_sha": snapshot.get("run_head_sha") or run.get("head_sha"),
+        "classification": snapshot.get("kind"),
+        "prepare": prepare,
+        "jobs": jobs,
+    }
 
 
 class GitHub:
@@ -182,72 +416,6 @@ class GitHub:
             f"execute workflow run not found for branch={branch} sha={sha} event={event}"
         )
 
-    def wait_new_review_run(
-        self,
-        workflow_id: int,
-        baseline_ids: set[int],
-        *,
-        timeout_seconds: int,
-        event: str | None = None,
-        actor: str | None = None,
-        correlation_text: str | None = None,
-        head_sha: str | None = None,
-        allow_terminal_events: bool = False,
-    ) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout_seconds
-        observed: list[dict[str, str]] = []
-        while time.monotonic() < deadline:
-            candidates = [
-                item
-                for item in self.list_workflow_runs(workflow_id, event=event)
-                if int(item["id"]) not in baseline_ids
-            ]
-            observed = [
-                {
-                    "id": str(item.get("id")),
-                    "event": str(item.get("event")),
-                    "actor": str((item.get("actor") or {}).get("login") or ""),
-                    "display_title": str(item.get("display_title") or ""),
-                    "head_sha": str(item.get("head_sha") or ""),
-                }
-                for item in candidates
-            ]
-            if actor is not None:
-                candidates = [
-                    item
-                    for item in candidates
-                    if str((item.get("actor") or {}).get("login") or "") == actor
-                    or (
-                        allow_terminal_events
-                        and str(item.get("event") or "") in TERMINAL_WAKE_EVENTS
-                    )
-                ]
-            if correlation_text:
-                token = correlation_text.lower()
-                candidates = [
-                    item
-                    for item in candidates
-                    if token in str(item.get("display_title") or "").lower()
-                    or (head_sha is not None and str(item.get("head_sha") or "") == head_sha)
-                ]
-            elif head_sha is not None:
-                candidates = [
-                    item for item in candidates if str(item.get("head_sha") or "") == head_sha
-                ]
-            if candidates:
-                return sorted(candidates, key=lambda item: str(item.get("created_at") or ""))[0]
-            time.sleep(self.poll_seconds)
-        raise ExternalServiceBlocker(
-            "review workflow run was not observed before timeout",
-            evidence={
-                "event": event,
-                "actor": actor,
-                "correlation_text": correlation_text,
-                "head_sha": head_sha,
-                "observed_new_runs": observed,
-            },
-        )
-
     def wait_without_comment_review_run(
         self,
         workflow_id: int,
@@ -295,13 +463,16 @@ class GitHub:
             time.sleep(self.poll_seconds)
         raise ExternalServiceBlocker(f"workflow run {run_id} did not complete before timeout")
 
+    def attempt_jobs(self, run_id: int, attempt: int) -> dict[str, str]:
+        jobs_data = self.api(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs")
+        return {
+            str(item["name"]): str(item.get("conclusion")) for item in jobs_data.get("jobs", [])
+        }
+
     def run_evidence(self, data: dict[str, Any]) -> RunEvidence:
         run_id = int(data["id"])
         attempt = int(data.get("run_attempt", 1))
-        jobs_data = self.api(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs")
-        jobs = {
-            str(item["name"]): str(item.get("conclusion")) for item in jobs_data.get("jobs", [])
-        }
+        jobs = self.attempt_jobs(run_id, attempt)
         _, events = self.attempt_events(run_id, attempt)
         return RunEvidence(
             id=run_id,
@@ -493,6 +664,10 @@ class GitHub:
         return latest
 
     def attempt_prepare_gate(self, run_id: int, attempt: int) -> dict[str, Any] | None:
+        payload, _log_error = self.read_prepare_gate(run_id, attempt)
+        return payload
+
+    def read_prepare_gate(self, run_id: int, attempt: int) -> tuple[dict[str, Any] | None, bool]:
         completed = run(
             [
                 "gh",
@@ -508,7 +683,7 @@ class GitHub:
             check=False,
         )
         if completed.returncode != 0:
-            return None
+            return None, True
         found: dict[str, Any] | None = None
         for line in completed.stdout.splitlines():
             brace = line.find("{")
@@ -526,7 +701,7 @@ class GitHub:
                 "head_sha": payload.get("head_sha"),
                 "pull_number": payload.get("pull_number"),
             }
-        return found
+        return found, False
 
     def observe_terminal_transports(
         self,
@@ -613,26 +788,122 @@ class GitHub:
             "skipped_observed": KIND_SKIPPED in kinds,
         }
 
-    def correlated_review_runs(
+    def head_transport_history(
         self,
-        workflow_id: int,
+        sha: str,
         *,
         actor: str,
-        correlation_text: str,
-        head_sha: str | None,
-    ) -> list[dict[str, Any]]:
-        token = correlation_text.lower()
-        matched: list[dict[str, Any]] = []
-        for item in self.list_workflow_runs(workflow_id):
-            event_name = str(item.get("event") or "")
-            run_actor = str((item.get("actor") or {}).get("login") or "")
-            title = str(item.get("display_title") or "").lower()
-            run_sha = str(item.get("head_sha") or "")
-            actor_ok = run_actor == actor or event_name in TERMINAL_WAKE_EVENTS
-            correlated = token in title or (head_sha is not None and run_sha == head_sha)
-            if actor_ok and correlated:
-                matched.append(item)
-        return matched
+        check_app_slug: str,
+        status_context: str,
+    ) -> dict[str, Any]:
+        checks = [
+            _compact_check_run(item)
+            for item in self.list_check_runs(sha)
+            if _check_app_slug(item) == check_app_slug
+        ]
+        statuses = [
+            _compact_commit_status(item)
+            for item in self.list_commit_statuses(sha)
+            if _status_matches(item, actor=actor, status_context=status_context)
+        ]
+        return {
+            "head_sha": sha,
+            "check_runs": checks,
+            "commit_statuses": statuses,
+        }
+
+    def classify_review_candidate(
+        self,
+        item: dict[str, Any],
+        *,
+        pr_number: int,
+        head_sha: str,
+        cache: dict[int, dict[str, Any]],
+    ) -> dict[str, Any]:
+        run_id = int(item["id"])
+        cached = cache.get(run_id)
+        if cached and cached.get("kind") in _STABLE_CANDIDATE_KINDS:
+            return {
+                **cached,
+                "run": item,
+                "status": item.get("status"),
+                "conclusion": item.get("conclusion"),
+                "run_head_sha": item.get("head_sha"),
+            }
+        attempt = int(item.get("run_attempt") or 1)
+        prepare = cached.get("prepare") if cached else None
+        log_error = bool(cached.get("prepare_log_error")) if cached else False
+        if prepare is None:
+            prepare, log_error = self.read_prepare_gate(run_id, attempt)
+        jobs = dict(cached.get("jobs") or {}) if cached else {}
+        run_status = str(item.get("status") or "")
+        if run_status not in {"queued", "requested"}:
+            try:
+                jobs = self.attempt_jobs(run_id, attempt)
+            except (CommandError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                jobs = jobs or {}
+        kind = classify_terminal_wake_candidate(
+            prepare=prepare,
+            jobs=jobs,
+            run_status=run_status,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            prepare_log_error=log_error,
+        )
+        snapshot = {
+            "id": run_id,
+            "kind": kind,
+            "run": item,
+            "event": item.get("event"),
+            "html_url": item.get("html_url"),
+            "status": item.get("status"),
+            "conclusion": item.get("conclusion"),
+            "run_head_sha": item.get("head_sha"),
+            "prepare": prepare,
+            "prepare_log_error": log_error,
+            "jobs": jobs,
+        }
+        cache[run_id] = snapshot
+        return snapshot
+
+    def scenario_a_timeout_evidence(
+        self,
+        *,
+        pr_number: int,
+        head_sha: str,
+        pr_head_sha: str,
+        actor: str,
+        check_app_slug: str,
+        status_context: str,
+        labels: tuple[str, ...],
+        diagnostic: dict[str, str] | None,
+        classified: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        seen_heads: list[str] = []
+        for sha in (head_sha, pr_head_sha):
+            if sha and sha not in seen_heads:
+                seen_heads.append(sha)
+        return {
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "pr_head_sha": pr_head_sha,
+            "configured_actor": actor,
+            "labels": list(labels),
+            "coderabbit_terminal": diagnostic,
+            "candidate_runs": [candidate_evidence_row(item) for item in classified],
+            "prepare_results": [
+                item.get("prepare") for item in classified if item.get("prepare") is not None
+            ],
+            "check_run_status_history": [
+                self.head_transport_history(
+                    sha,
+                    actor=actor,
+                    check_app_slug=check_app_slug,
+                    status_context=status_context,
+                )
+                for sha in seen_heads
+            ],
+        }
 
     def wait_for_scenario_a_signal(
         self,
@@ -645,59 +916,56 @@ class GitHub:
         known_ids: set[tuple[str, int, str]],
         workflow_id: int,
         baseline_ids: set[int],
+        seen_ids: set[int],
         timeout_seconds: int,
-        correlation_text: str,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
         diagnostic: dict[str, str] | None = None
         labels: tuple[str, ...] = ()
+        classified: list[dict[str, Any]] = []
+        pr_head_sha = head_sha
+        cache: dict[int, dict[str, Any]] = {}
         while time.monotonic() < deadline:
             pr = self.pr_evidence(pr_number)
             labels = pr.labels
+            pr_head_sha = pr.head_sha
             diagnostic = self.coderabbit_terminal(
                 pr.head_sha,
                 actor=actor,
                 check_app_slug=check_app_slug,
                 status_context=status_context,
             )
-            correlated = self.correlated_review_runs(
-                workflow_id,
-                actor=actor,
-                correlation_text=correlation_text,
-                head_sha=head_sha,
+            candidates = new_terminal_wake_runs(
+                self.list_workflow_runs(workflow_id), baseline_ids
             )
-            if pr.head_sha != head_sha:
-                correlated.extend(
-                    item
-                    for item in self.correlated_review_runs(
-                        workflow_id,
-                        actor=actor,
-                        correlation_text=correlation_text,
-                        head_sha=pr.head_sha,
-                    )
-                    if int(item["id"]) not in {int(existing["id"]) for existing in correlated}
+            classified = [
+                self.classify_review_candidate(
+                    item,
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    cache=cache,
                 )
+                for item in candidates
+            ]
+            for snapshot in classified:
+                raise_if_prepare_fault(snapshot)
+            review_runs = review_runs_from_classified(classified)
             active = [
                 item
-                for item in correlated
+                for item in review_runs
                 if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
             ]
-            new_runs = [item for item in correlated if int(item["id"]) not in baseline_ids]
+            unseen_review = choose_unseen_review_run(classified, seen_ids=seen_ids)
 
             if pr.head_sha == head_sha and not active:
                 state = terminal_state(pr)
-                completed = [
-                    item
-                    for item in correlated
-                    if str(item.get("status") or "") == "completed"
-                ]
-                if state in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"} and completed:
-                    latest = sorted(
-                        completed,
-                        key=lambda item: str(
-                            item.get("updated_at") or item.get("created_at") or ""
-                        ),
-                    )[-1]
+                latest = completed_review_run_for_terminal(
+                    classified,
+                    current_head=head_sha,
+                    pr_head_sha=pr.head_sha,
+                    terminal=state,
+                )
+                if latest is not None:
                     return {
                         "kind": "production_terminal",
                         "state": state,
@@ -705,13 +973,10 @@ class GitHub:
                         "coderabbit_terminal": diagnostic,
                     }
 
-            if new_runs:
-                chosen = sorted(
-                    new_runs, key=lambda item: str(item.get("created_at") or "")
-                )[0]
+            if unseen_review is not None:
                 return {
                     "kind": "run",
-                    "run": chosen,
+                    "run": unseen_review,
                     "coderabbit_terminal": diagnostic,
                 }
 
@@ -730,12 +995,17 @@ class GitHub:
             time.sleep(self.poll_seconds)
         raise ExternalServiceBlocker(
             "production review terminal or review run was not observed before timeout",
-            evidence={
-                "head_sha": head_sha,
-                "configured_actor": actor,
-                "labels": list(labels),
-                "coderabbit_terminal": diagnostic,
-            },
+            evidence=self.scenario_a_timeout_evidence(
+                pr_number=pr_number,
+                head_sha=head_sha,
+                pr_head_sha=pr_head_sha,
+                actor=actor,
+                check_app_slug=check_app_slug,
+                status_context=status_context,
+                labels=labels,
+                diagnostic=diagnostic,
+                classified=classified,
+            ),
         )
 
     def branch_sha(self, branch: str) -> str:

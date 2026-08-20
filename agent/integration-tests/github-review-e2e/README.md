@@ -80,6 +80,14 @@ Polling は次の順です。
 2. terminal でなければ poll 継続
 3. CodeRabbit status と feedback は補助情報
 
+Agent Review run の相関は workflow run の `head_sha` や `display_title` を使いません。
+`check_run` / `status` 起動では GitHub が default branch SHA を run HEAD として表示することがあるためです。
+Harness は E2E 開始前の run ID 集合を baseline にし、その後の新規 `status` / `check_run` run を候補にします。
+対象 PR は prepare 出力の `pull_number` と **観測中の current HEAD** で確定します。repair push 後は新しい `current_head` に対する prepare 出力だけを Scenario A 対象にし、古い HEAD の event は ingest しません。
+`should_review=false` は正常 skip です。prepare job の failure、または完了後に prepare JSON を取得できない場合は timeout せず Production / Environment 障害として扱います。
+`status` と `check_run` が両方来ても、skip では終了せず、review job が実行された run だけを ingest します。片方の in-progress 中は Production terminal で誤終了しません。
+timeout 時は run ID / event、run と prepare job の conclusion、prepare 出力取得可否、`should_review` / `reason` / `pull_number` / `head_sha`、Checks / commit status 履歴を report に残します。
+
 古い HEAD に付いた `agent:ready` は成功にしません。最新 review run の structured event が current HEAD に対応していることを確認します。
 
 最低限、次をassertします。

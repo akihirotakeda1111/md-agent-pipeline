@@ -436,11 +436,11 @@ def main() -> int:
                     status_context=configured_status_context,
                     known_ids=known_feedback,
                     workflow_id=review_workflow.id,
-                    baseline_ids=seen_review_runs,
+                    baseline_ids=review_baseline,
+                    seen_ids=seen_review_runs,
                     timeout_seconds=remaining_timeout(
                         convergence_deadline, args.review_timeout_seconds
                     ),
-                    correlation_text=suffix,
                 )
                 if signal.get("coderabbit_terminal"):
                     scenario_a_terminal = signal["coderabbit_terminal"]
