@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.config import RuntimeEditPolicy
 from agent.errors import AgentError
+from agent.scope import format_scope_prompt_sections
 from agent.spec import SpecTask, TaskSpec
 from agent.validation import ValidationRecord
 
@@ -35,6 +37,7 @@ def build_repair_prompt(
     repo_root: Path | str,
     failed: ValidationRecord,
     diff_text: str,
+    runtime_policy: RuntimeEditPolicy,
 ) -> str:
     instruction = load_repair_instruction()
     error_output = (failed.stderr or failed.stdout).strip()
@@ -48,11 +51,7 @@ def build_repair_prompt(
                 "# Repository",
                 f"- path: {Path(repo_root)}",
                 "",
-                "# Allowed Paths",
-                *[f"- {path}" for path in spec.allowed_paths],
-                "",
-                "# Forbidden Paths",
-                *[f"- {path}" for path in spec.forbidden_paths],
+                format_scope_prompt_sections(spec, runtime_policy),
                 "",
                 "# Architecture Invariants",
                 spec.architecture_invariants.strip(),
@@ -79,6 +78,7 @@ def build_repair_prompt(
                 diff_text.strip() or "(no diff)",
                 "",
                 "Do not delete tests or disable lint to make validation pass.",
+                "Protected paths cannot be edited even when listed in Allowed Paths.",
             ]
         )
         + "\n"

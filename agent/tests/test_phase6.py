@@ -1113,3 +1113,80 @@ def test_deliver_final_verification_failure_does_not_git_write(tmp_path: Path) -
     assert "feat(" not in _git(repo, "log", "--oneline")
     listed = _git(origin, "branch")
     assert "feature/deliver" not in listed
+
+
+def test_deliver_rejects_runtime_protected_path_in_patch(tmp_path: Path) -> None:
+    from agent.delivery import run_delivery
+    from agent.gitwrite import export_patch, head_sha
+    from agent.spec import parse_spec as parse
+    from agent.workunit import file_sha256, write_work_unit_report
+
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "--bare")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "p6@example.com")
+    _git(repo, "config", "user.name", "Phase6")
+    spec_path = repo / "spec.md"
+    spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
+    _git(repo, "add", "spec.md")
+    _git(repo, "commit", "-m", "init")
+    _git(repo, "remote", "add", "origin", str(origin))
+    base = head_sha(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.py").write_text("ok\n", encoding="utf-8")
+    (repo / "agent").mkdir()
+    (repo / "agent" / "config.json").write_text("{}\n", encoding="utf-8")
+    report_dir = tmp_path / "report"
+    patch = report_dir / "changes.patch"
+    export_patch(repo, base, patch)
+    spec = parse(spec_path)
+    report = _report(
+        spec_id=spec.id,
+        spec_path=str(spec_path),
+        base_sha=base,
+        branch=spec.target_branch,
+        changed_files=("src/app.py", "agent/config.json"),
+        patch_sha256=file_sha256(patch),
+    )
+    write_work_unit_report(report_dir, report)
+    (repo / "src" / "app.py").unlink()
+    (repo / "agent" / "config.json").unlink()
+    github = _FakeGitHub()
+    result = run_delivery(
+        spec,
+        repo_root=repo,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.code == "COMMIT_SCOPE_VIOLATION"
+    assert github.created_pulls == 0
+    assert "feat(" not in _git(repo, "log", "--oneline")
+
+
+def test_deliver_semantic_guard_rejects_starstar_allowed(tmp_path: Path) -> None:
+    from agent.delivery import run_delivery
+    from agent.workunit import file_sha256, write_work_unit_report
+
+    spec_text = DELIVER_SPEC.replace("  - src/**", '  - "**"')
+    spec_path = tmp_path / "spec.md"
+    spec_path.write_text(spec_text, encoding="utf-8")
+    spec = parse_spec(spec_path)
+    report_dir = tmp_path / "report"
+    report_dir.mkdir()
+    patch = report_dir / "changes.patch"
+    patch.write_text("", encoding="utf-8")
+    write_work_unit_report(report_dir, _report(patch_sha256=file_sha256(patch)))
+    with pytest.raises(AgentError) as exc_info:
+        run_delivery(
+            spec,
+            repo_root=tmp_path,
+            report_dir=report_dir,
+            github=_FakeGitHub(),  # type: ignore[arg-type]
+            summary_path=tmp_path / "summary.md",
+        )
+    assert exc_info.value.code == "INVALID_SPEC"

@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from agent.config import AgentConfig, CodexConfig, load_config
+from agent.config import AgentConfig, CodexConfig, RuntimeEditPolicy, load_config
 from agent.errors import AgentError
 from agent.spec import SpecTask, TaskSpec
 
@@ -180,7 +180,10 @@ def build_implementation_prompt(
     task: SpecTask,
     *,
     repo_root: Path | str,
+    runtime_policy: RuntimeEditPolicy,
 ) -> str:
+    from agent.scope import format_scope_prompt_sections
+
     instruction = load_implementation_instruction()
     root = Path(repo_root)
     sections = [
@@ -191,11 +194,7 @@ def build_implementation_prompt(
         f"- spec_id: {spec.id}",
         f"- spec_title: {spec.title}",
         "",
-        "# Allowed Paths",
-        *_bullet(spec.allowed_paths),
-        "",
-        "# Forbidden Paths",
-        *_bullet(spec.forbidden_paths or ("(none listed)",)),
+        format_scope_prompt_sections(spec, runtime_policy),
         "",
         "# Forbidden Actions",
         spec.forbidden_actions.strip(),
@@ -216,8 +215,8 @@ def build_implementation_prompt(
         "## Validation (informational; Orchestrator will execute this later)",
         task.validation.strip(),
         "",
-        "Do not run git commit/push, create pull requests, or edit",
-        "specs/, .agent/, agent/, or .github/ unless those paths are allowed.",
+        "Do not run git commit/push or create pull requests.",
+        "Protected paths cannot be edited even when listed in Allowed Paths.",
     ]
     return "\n".join(sections) + "\n"
 
@@ -444,7 +443,11 @@ def run_codex(
         raise AgentError.invalid_input(f"repository working directory not found: {root}")
 
     prompt_text = (
-        prompt if prompt is not None else build_implementation_prompt(spec, task, repo_root=root)
+        prompt
+        if prompt is not None
+        else build_implementation_prompt(
+            spec, task, repo_root=root, runtime_policy=cfg.runtime_edit_policy
+        )
     )
     child_env = build_codex_env(env, api_key_env=cfg.codex.api_key_env)
     api_key_value = child_env.get(cfg.codex.api_key_env)
@@ -548,7 +551,3 @@ def _default_executor(
         stdout=completed.stdout or "",
         stderr=completed.stderr or "",
     )
-
-
-def _bullet(values: tuple[str, ...] | list[str]) -> list[str]:
-    return [f"- {item}" for item in values]

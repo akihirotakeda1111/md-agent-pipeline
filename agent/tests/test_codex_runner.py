@@ -71,7 +71,9 @@ def test_command_rejects_danger_full_access(tmp_path: Path) -> None:
 
 def test_prompt_contains_current_task_and_contract() -> None:
     spec, task = _spec_and_task()
-    prompt = build_implementation_prompt(spec, task, repo_root=REPO_ROOT)
+    prompt = build_implementation_prompt(
+        spec, task, repo_root=REPO_ROOT, runtime_policy=load_config().runtime_edit_policy
+    )
 
     assert "implementation engine" in prompt
     assert "MUST NOT" in prompt
@@ -82,6 +84,11 @@ def test_prompt_contains_current_task_and_contract() -> None:
     assert str(REPO_ROOT) in prompt
     assert "task-2" not in prompt
     assert "Heartbeat loop" not in prompt
+    assert "# Repository Protected Paths" in prompt
+    assert "# Task-level Forbidden Paths" in prompt
+    assert "# Allowed Paths" in prompt
+    assert "Protected > Forbidden > Allowed" in prompt
+    assert "unless those paths are allowed" not in prompt
 
 
 def test_env_allowlist_excludes_github_and_openai_keys() -> None:

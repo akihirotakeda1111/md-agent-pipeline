@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.config import RuntimeEditPolicy
 from agent.review_types import ReviewFeedback
 from agent.scope import path_is_in_scope
 from agent.spec import TaskSpec
@@ -47,16 +48,19 @@ def path_is_missing(item: ReviewFeedback, repo_root: Path | str) -> bool:
     return not (Path(repo_root) / item.path).exists()
 
 
-def path_is_obviously_forbidden(item: ReviewFeedback, spec: TaskSpec) -> bool:
+def path_is_obviously_forbidden(
+    item: ReviewFeedback, spec: TaskSpec, runtime_policy: RuntimeEditPolicy
+) -> bool:
     if not item.path:
         return False
-    return not path_is_in_scope(item.path, spec)
+    return not path_is_in_scope(item.path, spec, runtime_policy)
 
 
 def prefilter_reason(
     item: ReviewFeedback,
     *,
     spec: TaskSpec,
+    runtime_policy: RuntimeEditPolicy,
     actor: str,
     head_sha: str,
     processed: set[str],
@@ -72,6 +76,6 @@ def prefilter_reason(
         return "outdated-head"
     if path_is_missing(item, repo_root):
         return "missing-path"
-    if path_is_obviously_forbidden(item, spec):
+    if path_is_obviously_forbidden(item, spec, runtime_policy):
         return "forbidden-path"
     return None

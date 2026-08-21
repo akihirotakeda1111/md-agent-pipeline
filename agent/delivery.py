@@ -41,7 +41,7 @@ from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error
 from agent.pr import build_pr_body, build_pr_title
 from agent.reconcile import reconcile_open_pull
-from agent.scope import check_scope
+from agent.scope import check_scope, validate_spec_scope_policy
 from agent.spec import TaskSpec, parse_spec
 from agent.summary import render_summary, write_github_summary
 from agent.workunit import WorkUnitReport, file_sha256, load_work_unit_report
@@ -161,6 +161,7 @@ def run_delivery(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
+    validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     report = load_work_unit_report(report_dir)
     client = github
     try:
@@ -237,7 +238,7 @@ def _deliver(
     )
     actual_changes = collect_changes(root, report.base_sha)
     actual_paths = change_path_list(actual_changes)
-    scope = check_scope(spec, actual_changes)
+    scope = check_scope(spec, actual_changes, cfg.runtime_edit_policy)
     if not scope.allowed:
         raise AgentError.policy_violation(
             "scope violation after patch apply: " + ", ".join(scope.violation_paths),

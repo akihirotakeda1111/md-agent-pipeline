@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent.config import RuntimeEditPolicy
 from agent.review_types import (
     ClassificationResult,
     PolicyDecision,
@@ -22,6 +23,7 @@ def decide_review_policy(
     result: ClassificationResult,
     spec: TaskSpec,
     *,
+    runtime_policy: RuntimeEditPolicy,
     confidence_threshold: float,
     auto_repair_enabled: bool = False,
 ) -> PolicyDecision:
@@ -73,7 +75,7 @@ def decide_review_policy(
             "actionable review has no referenced paths",
             result.classification,
         )
-    if any(not path_is_in_scope(path, spec) for path in result.referenced_paths):
+    if any(not path_is_in_scope(path, spec, runtime_policy) for path in result.referenced_paths):
         return PolicyDecision(
             ReviewPolicyAction.ESCALATE,
             "actionable referenced paths are not a subset of allowed_paths",

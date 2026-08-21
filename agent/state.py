@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import stat
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -18,6 +21,104 @@ from agent.spec import TaskSpec
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "execution-state.schema.json"
 
 _EXECUTION_STATE_SCHEMA: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class StateFileFingerprint:
+    exists: bool
+    file_type: str
+    content_sha256: str | None
+    symlink_target: str | None
+
+
+def current_state_relpath(spec_id: str, config: AgentConfig) -> str:
+    directory = Path(config.state.directory).as_posix().rstrip("/")
+    return f"{directory}/{spec_id}.json"
+
+
+def fingerprint_state_file(path: Path | str) -> StateFileFingerprint:
+    """Fingerprint a current-state file without following symlinks."""
+    target = Path(path)
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return StateFileFingerprint(
+            exists=False,
+            file_type="absent",
+            content_sha256=None,
+            symlink_target=None,
+        )
+    except OSError as exc:
+        raise AgentError.environment_failure(
+            f"current state could not be fingerprinted: {target}",
+            code="STATE_TAMPERED",
+        ) from exc
+
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="symlink",
+            content_sha256=None,
+            symlink_target=os.readlink(target),
+        )
+    if stat.S_ISREG(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="regular",
+            content_sha256=_sha256_regular_file(target),
+            symlink_target=None,
+        )
+    if stat.S_ISDIR(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="directory",
+            content_sha256=None,
+            symlink_target=None,
+        )
+    return StateFileFingerprint(
+        exists=True,
+        file_type="other",
+        content_sha256=None,
+        symlink_target=None,
+    )
+
+
+def assert_current_state_regular_or_absent(path: Path | str) -> None:
+    """Fail closed if the current-state path exists and is not a regular file.
+
+    Uses lstat so a symlink to a valid Execution State JSON is rejected before
+    any follow-on read or replace.
+    """
+    fingerprint = fingerprint_state_file(path)
+    if fingerprint.exists and fingerprint.file_type != "regular":
+        raise AgentError.policy_violation(
+            f"current state is not a regular file: {path}",
+            code="STATE_TAMPERED",
+        )
+
+
+def _sha256_regular_file(path: Path) -> str:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise AgentError.environment_failure(
+            f"current state could not be read: {path}",
+            code="STATE_TAMPERED",
+        ) from exc
+    try:
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
 
 
 class ExecutionStatus(StrEnum):
@@ -269,6 +370,7 @@ def state_file_path(
 
 def read_state(path: Path | str) -> ExecutionState:
     state_path = Path(path)
+    assert_current_state_regular_or_absent(state_path)
     try:
         raw = state_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -288,6 +390,7 @@ def write_state(path: Path | str, state: ExecutionState) -> None:
     payload = state.to_json_dict()
     validate_execution_state_dict(payload)
     state_path = Path(path)
+    assert_current_state_regular_or_absent(state_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     tmp_path = state_path.with_name(state_path.name + ".tmp")
@@ -303,6 +406,7 @@ def init_state(
     overwrite: bool = False,
 ) -> ExecutionState:
     path = state_file_path(repo_root, spec.id, config=config)
+    assert_current_state_regular_or_absent(path)
     if path.exists() and not overwrite:
         raise AgentError.policy_violation(
             f"execution state already exists: {path}",

@@ -15,6 +15,7 @@ from agent.errors import AgentError
 from agent.events import (
     FAILED,
     FINAL_VALIDATION_PASSED,
+    SCOPE_VIOLATION,
     SPEC_DISCOVERED,
     SPEC_VALIDATED,
     STATE_INITIALIZED,
@@ -25,8 +26,9 @@ from agent.events import (
 from agent.gitutil import capture_snapshot, change_path_list, collect_changes
 from agent.gitwrite import export_patch, head_sha
 from agent.reconcile import ReconcileResult, load_state_or_new, prepare_execution_state
+from agent.scope import validate_spec_scope_policy
 from agent.spec import TaskSpec, parse_spec
-from agent.state import ExecutionState, new_execution_state
+from agent.state import ExecutionState, current_state_relpath, new_execution_state
 
 
 def file_sha256(path: Path | str) -> str:
@@ -130,15 +132,40 @@ def run_work_unit(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
+    validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     emit(SPEC_DISCOVERED, "task spec discovered", task_id=parsed.id, state="PENDING")
     emit(SPEC_VALIDATED, "task spec is valid", task_id=parsed.id, state="PENDING")
     try:
-        reconciled = prepare_execution_state(parsed, root, persist_state=persist_state)
+        reconciled = prepare_execution_state(parsed, root, persist_state=persist_state, config=cfg)
     except AgentError as exc:
         snapshot = capture_snapshot(root)
+        if exc.code == "STATE_TAMPERED":
+            report = WorkUnitReport(
+                outcome="SCOPE_VIOLATION",
+                spec_id=parsed.id,
+                spec_path=parsed.source_path or "",
+                base_sha=snapshot.base_sha,
+                branch=parsed.target_branch,
+                state=new_execution_state(parsed),
+                completed_tasks=(),
+                changed_files=(),
+                validation_results=(),
+                repair_attempts=0,
+                final_verification_passed=False,
+                validation_passed=False,
+                scope_allowed=False,
+                message=f"STATE_TAMPERED: {current_state_relpath(parsed.id, cfg)}",
+                current_task=None,
+                skip_reason=f"STATE_TAMPERED: {current_state_relpath(parsed.id, cfg)}",
+            )
+            _export_and_write(root, snapshot.base_sha, report_dir, report)
+            emit(SCOPE_VIOLATION, report.message, task_id=parsed.id, state=report.state.state.value)
+            return report
         try:
             state = (
-                load_state_or_new(parsed, root) if persist_state else new_execution_state(parsed)
+                load_state_or_new(parsed, root, config=cfg)
+                if persist_state
+                else new_execution_state(parsed)
             )
         except Exception:
             state = new_execution_state(parsed)

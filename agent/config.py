@@ -71,6 +71,14 @@ class CodeRabbitConfig:
     status_context: str
 
 
+CONFIG_RELATIVE_PATH = "agent/config.json"
+
+
+@dataclass(frozen=True)
+class RuntimeEditPolicy:
+    protected_paths: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     task_spec: TaskSpecConfig
@@ -81,6 +89,7 @@ class AgentConfig:
     review: ReviewConfig
     notification: NotificationConfig
     coderabbit: CodeRabbitConfig
+    runtime_edit_policy: RuntimeEditPolicy
 
 
 def load_config(path: Path | str | None = None) -> AgentConfig:
@@ -116,6 +125,19 @@ def load_config(path: Path | str | None = None) -> AgentConfig:
 def _parse_config(payload: dict[str, Any]) -> AgentConfig:
     task_spec = _require_object(payload, "task_spec")
     state = _require_object(payload, "state")
+    task_spec_directory = _canonicalize_repo_relative_posix(
+        _require_non_empty_str(task_spec, "directory", "task_spec"),
+        field="task_spec.directory",
+    )
+    state_directory = _canonicalize_repo_relative_posix(
+        _require_non_empty_str(state, "directory", "state"),
+        field="state.directory",
+    )
+    runtime_edit_policy = _parse_runtime_edit_policy(
+        payload,
+        task_spec_directory=task_spec_directory,
+        state_directory=state_directory,
+    )
     codex = _optional_object(payload, "codex")
     retry = _optional_object(payload, "retry")
     validation = _optional_object(payload, "validation")
@@ -124,10 +146,9 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
     coderabbit = _optional_object(payload, "coderabbit")
 
     return AgentConfig(
-        task_spec=TaskSpecConfig(
-            directory=_require_non_empty_str(task_spec, "directory", "task_spec")
-        ),
-        state=StateConfig(directory=_require_non_empty_str(state, "directory", "state")),
+        task_spec=TaskSpecConfig(directory=task_spec_directory),
+        state=StateConfig(directory=state_directory),
+        runtime_edit_policy=runtime_edit_policy,
         codex=CodexConfig(
             bin=_optional_non_empty_str(codex, "bin", "codex", default="codex"),
             package=_optional_non_empty_str(codex, "package", "codex", default="@openai/codex"),
@@ -194,6 +215,121 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
                 coderabbit, "status_context", "coderabbit", default="CodeRabbit"
             ),
         ),
+    )
+
+
+def _parse_runtime_edit_policy(
+    payload: dict[str, Any],
+    *,
+    task_spec_directory: str,
+    state_directory: str,
+) -> RuntimeEditPolicy:
+    policy = _require_object(payload, "runtime_edit_policy")
+    if "protected_paths" not in policy:
+        raise AgentError.invalid_input(
+            "missing required field: runtime_edit_policy.protected_paths"
+        )
+    raw_paths = policy["protected_paths"]
+    if not isinstance(raw_paths, list):
+        raise AgentError.invalid_input("runtime_edit_policy.protected_paths must be an array")
+    if not raw_paths:
+        raise AgentError.invalid_input("runtime_edit_policy.protected_paths must not be empty")
+
+    canonical: list[str] = []
+    seen: set[str] = set()
+    for item in raw_paths:
+        pattern = _canonicalize_protected_pattern(item)
+        if pattern in seen:
+            continue
+        seen.add(pattern)
+        canonical.append(pattern)
+    if not canonical:
+        raise AgentError.invalid_input("runtime_edit_policy.protected_paths must not be empty")
+
+    protected = tuple(canonical)
+    _assert_required_protection(
+        protected,
+        task_spec_directory=task_spec_directory,
+        state_directory=state_directory,
+    )
+    return RuntimeEditPolicy(protected_paths=protected)
+
+
+def _canonicalize_protected_pattern(value: Any) -> str:
+    field = "runtime_edit_policy.protected_paths"
+    if not isinstance(value, str) or not value.strip():
+        raise AgentError.invalid_input(f"{field} entries must be non-empty strings")
+    return _canonicalize_repo_relative_posix(value, field=field)
+
+
+def _canonicalize_repo_relative_posix(value: str, *, field: str) -> str:
+    """Normalize a repository-relative path or glob without stripping a leading slash.
+
+    Order: trim whitespace, convert backslashes to POSIX separators, then reject
+    absolute / drive / UNC / empty / ``.`` / ``..`` segments. Only a trailing
+    slash is removed after those checks.
+    """
+    raw = value.strip()
+    if not raw:
+        raise AgentError.invalid_input(f"{field} must be a non-empty string")
+
+    normalized = raw.replace("\\", "/")
+    if _is_windows_drive_path(raw) or _is_windows_drive_path(normalized):
+        raise AgentError.invalid_input(f"{field} must not contain a Windows drive path: {value}")
+    if _is_unc_path(raw) or _is_unc_path(normalized):
+        raise AgentError.invalid_input(f"{field} must not contain a UNC path: {value}")
+    if raw.startswith("/") or normalized.startswith("/"):
+        raise AgentError.invalid_input(f"{field} must be repository-relative: {value}")
+
+    parts = normalized.split("/")
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    if not parts or any(part == "" for part in parts):
+        raise AgentError.invalid_input(f"{field} must be repository-relative: {value}")
+    if any(part in {".", ".."} for part in parts):
+        raise AgentError.invalid_input(f"{field} must not contain . or .. path segments: {value}")
+    return "/".join(parts)
+
+
+def _is_windows_drive_path(value: str) -> bool:
+    return len(value) >= 2 and value[0].isalpha() and value[1] == ":"
+
+
+def _is_unc_path(value: str) -> bool:
+    return value.startswith("\\\\") or value.startswith("//")
+
+
+def _assert_required_protection(
+    protected_paths: tuple[str, ...],
+    *,
+    task_spec_directory: str,
+    state_directory: str,
+) -> None:
+    from agent.scope import path_matches
+
+    if not any(path_matches(CONFIG_RELATIVE_PATH, pattern) for pattern in protected_paths):
+        raise AgentError.invalid_input(
+            f"runtime_edit_policy.protected_paths must protect {CONFIG_RELATIVE_PATH}"
+        )
+    if not _directory_is_recursively_protected(task_spec_directory, protected_paths):
+        raise AgentError.invalid_input(
+            "runtime_edit_policy.protected_paths must recursively protect task_spec.directory"
+        )
+    if not _directory_is_recursively_protected(state_directory, protected_paths):
+        raise AgentError.invalid_input(
+            "runtime_edit_policy.protected_paths must recursively protect state.directory"
+        )
+
+
+def _directory_is_recursively_protected(directory: str, patterns: tuple[str, ...]) -> bool:
+    from agent.scope import path_matches
+
+    rel = directory
+    if not rel or rel.startswith("/") or _is_windows_drive_path(rel) or _is_unc_path(rel):
+        return False
+    child = f"{rel}/__runtime_policy_child__"
+    return any(path_matches(rel, pattern) for pattern in patterns) and any(
+        path_matches(child, pattern) for pattern in patterns
     )
 
 

@@ -284,7 +284,8 @@ def run_check_scope(argv: Sequence[str] | None = None) -> int:
         spec = parse_spec(args.spec)
         snapshot = capture_snapshot(args.repo_root)
         changes = collect_changes(args.repo_root, snapshot.base_sha)
-        result = check_scope(spec, changes)
+        cfg = load_config()
+        result = check_scope(spec, changes, cfg.runtime_edit_policy)
         _print_json({"ok": result.allowed, "base_sha": snapshot.base_sha, **result.to_json_dict()})
         return EXIT_OK if result.allowed else EXIT_POLICY
     except Exception as exc:

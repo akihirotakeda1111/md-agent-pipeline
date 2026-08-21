@@ -73,7 +73,7 @@ from agent.review_types import (
     ReviewFeedback,
     ReviewPolicyAction,
 )
-from agent.scope import check_scope
+from agent.scope import check_scope, validate_spec_scope_policy
 from agent.spec import TaskSpec, parse_spec
 from agent.validation import run_validation_text
 
@@ -204,6 +204,7 @@ def _run_review(
                 code="WORK_UNIT_PR_MISMATCH",
             )
         spec = parse_spec(find_spec_by_id(root, marker["spec_id"], config=cfg))
+    validate_spec_scope_policy(spec, cfg.runtime_edit_policy)
     ensure_review_labels(client)
     track_id, track = load_review_track(
         client, pull_number, spec, track_author=cfg.review.track_author
@@ -243,6 +244,7 @@ def _run_review(
         reason = prefilter_reason(
             item,
             spec=spec,
+            runtime_policy=cfg.runtime_edit_policy,
             actor=cfg.coderabbit.actor,
             head_sha=head_sha_expected,
             processed=processed,
@@ -335,6 +337,7 @@ def _run_review(
         decision = decide_review_policy(
             result,
             spec,
+            runtime_policy=cfg.runtime_edit_policy,
             confidence_threshold=cfg.review.confidence_threshold,
             auto_repair_enabled=cfg.review.auto_repair_enabled,
         )
@@ -475,6 +478,7 @@ def _apply_review_fix(
         base_sha=_merge_base_sha(root, spec),
         accepted=tuple(accepted),
         current_task=current_task,
+        runtime_policy=cfg.runtime_edit_policy,
     )
     task = current_task or resolve_task(spec, spec.tasks[0].id)
     run_codex(
@@ -489,7 +493,7 @@ def _apply_review_fix(
         attempt=attempt,
     )
     changes = collect_changes(root, snapshot.base_sha)
-    scope = check_scope(spec, changes)
+    scope = check_scope(spec, changes, cfg.runtime_edit_policy)
     if not scope.allowed:
         emit(
             REVIEW_FIX_VALIDATION_FAILED,

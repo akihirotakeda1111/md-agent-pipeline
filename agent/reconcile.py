@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from agent.config import AgentConfig
 from agent.errors import AgentError
 from agent.github_api import GitHubClient
 from agent.pr import is_same_work_unit_pull
@@ -21,6 +22,7 @@ from agent.state import (
     ExecutionState,
     ExecutionStatus,
     apply_transition,
+    assert_current_state_regular_or_absent,
     new_execution_state,
     read_state,
     state_file_path,
@@ -54,8 +56,13 @@ class OpenPullReconcile:
     pull: dict[str, Any] | None
 
 
-def load_state_or_new(spec: TaskSpec, repo_root: Path | str) -> ExecutionState:
-    path = state_file_path(repo_root, spec.id)
+def load_state_or_new(
+    spec: TaskSpec,
+    repo_root: Path | str,
+    config: AgentConfig | None = None,
+) -> ExecutionState:
+    path = state_file_path(repo_root, spec.id, config=config)
+    assert_current_state_regular_or_absent(path)
     if path.exists():
         return read_state(path)
     return new_execution_state(spec)
@@ -66,6 +73,7 @@ def prepare_execution_state(
     repo_root: Path | str,
     *,
     persist_state: bool = False,
+    config: AgentConfig | None = None,
 ) -> ReconcileResult:
     """Load in-run Execution State. GitHub Actions uses persist_state=False."""
     root = Path(repo_root)
@@ -75,7 +83,8 @@ def prepare_execution_state(
             new_execution_state(spec),
             "ephemeral start from the beginning",
         )
-    path = state_file_path(root, spec.id)
+    path = state_file_path(root, spec.id, config=config)
+    assert_current_state_regular_or_absent(path)
     if not path.exists():
         state = new_execution_state(spec)
         write_state(path, state)

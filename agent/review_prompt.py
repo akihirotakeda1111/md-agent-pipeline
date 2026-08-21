@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.config import RuntimeEditPolicy
 from agent.gitutil import working_tree_diff_text
 from agent.review_types import ClassificationResult, ReviewFeedback
+from agent.scope import format_scope_prompt_sections
 from agent.spec import SpecTask, TaskSpec
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "review-repair.md"
@@ -18,6 +20,7 @@ def build_review_repair_prompt(
     base_sha: str,
     accepted: tuple[tuple[ReviewFeedback, ClassificationResult], ...],
     current_task: SpecTask | None,
+    runtime_policy: RuntimeEditPolicy,
 ) -> str:
     contract = PROMPT_PATH.read_text(encoding="utf-8").strip()
     comments = []
@@ -61,8 +64,8 @@ def build_review_repair_prompt(
             "# Task Spec",
             f"- id: {spec.id}",
             f"- title: {spec.title}",
-            f"- allowed_paths: {', '.join(spec.allowed_paths)}",
-            f"- forbidden_paths: {', '.join(spec.forbidden_paths)}",
+            "",
+            format_scope_prompt_sections(spec, runtime_policy),
             "",
             "# Objective",
             spec.objective.strip() or "(none)",
@@ -84,6 +87,8 @@ def build_review_repair_prompt(
             "",
             "# Final Verification",
             spec.final_verification.strip() or "(none)",
+            "",
+            "Protected paths cannot be edited even when listed in Allowed Paths.",
             "",
         ]
     )
