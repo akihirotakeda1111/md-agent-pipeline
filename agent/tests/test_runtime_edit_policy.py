@@ -30,6 +30,8 @@ from agent.state import (
 from agent.validation import ValidationRecord
 from agent.workunit import run_work_unit
 
+PYTHON_COMMAND = Path(sys.executable).name
+
 SPEC_TEMPLATE = """---
 schema_version: 1
 id: policy-demo
@@ -76,13 +78,13 @@ Create src/app.py with ok.
 ### Validation
 
 ```text
-python3 check_app.py
+{python_command} check_app.py
 ```
 
 # Final Verification
 
 ```text
-python3 check_app.py
+{python_command} check_app.py
 ```
 """
 
@@ -107,6 +109,7 @@ def _spec_text(
         allowed=_yaml_list(allowed),
         forbidden=_yaml_list(forbidden),
         limit=limit,
+        python_command=PYTHON_COMMAND,
     )
 
 

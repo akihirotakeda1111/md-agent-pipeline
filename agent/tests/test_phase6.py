@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from agent.workunit import WorkUnitReport
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_SPEC = REPO_ROOT / "specs" / "tasks" / "example-task.md"
+PYTHON_COMMAND = Path(sys.executable).name
 
 
 def _report(**overrides: object) -> WorkUnitReport:
@@ -611,15 +613,15 @@ Create src/app.py.
 ### Validation
 
 ```text
-python -c "print(1)"
+{python_command} -c "print(1)"
 ```
 
 # Final Verification
 
 ```text
-python -c "print(1)"
+{python_command} -c "print(1)"
 ```
-"""
+""".format(python_command=PYTHON_COMMAND)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1021,7 +1023,10 @@ def test_work_unit_report_keeps_repair_attempts_after_final_verification(tmp_pat
     _git(repo, "config", "user.name", "Phase6")
     spec_path = repo / "spec.md"
     spec_path.write_text(
-        DELIVER_SPEC.replace('python -c "print(1)"', "python check.py"),
+        DELIVER_SPEC.replace(
+            f'{PYTHON_COMMAND} -c "print(1)"',
+            f"{PYTHON_COMMAND} check.py",
+        ),
         encoding="utf-8",
     )
     (repo / "check.py").write_text(
@@ -1074,7 +1079,7 @@ def test_deliver_final_verification_failure_does_not_git_write(tmp_path: Path) -
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
     (repo / "fail_fv.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
     fail_body = DELIVER_SPEC.rsplit("# Final Verification", 1)[0] + (
-        "# Final Verification\n\n```text\npython fail_fv.py\n```\n"
+        f"# Final Verification\n\n```text\n{PYTHON_COMMAND} fail_fv.py\n```\n"
     )
     spec_path.write_text(fail_body, encoding="utf-8")
     _git(repo, "add", "spec.md", "fail_fv.py")

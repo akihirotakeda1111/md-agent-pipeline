@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import subprocess
+import sys
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +41,8 @@ from agent.review_types import (
     ReviewPolicyAction,
 )
 from agent.spec import TaskSpec, parse_spec
+
+PYTHON_COMMAND = Path(sys.executable).name
 
 SPEC = """---
 schema_version: 1
@@ -87,13 +91,13 @@ Create src/app.py with ok.
 ### Validation
 
 ```text
-python check_app.py
+{python_command} check_app.py
 ```
 
 # Final Verification
 
 ```text
-python check_app.py
+{python_command} check_app.py
 ```
 """
 
@@ -119,7 +123,10 @@ def _repo(tmp_path: Path, *, limit: int = 3) -> Path:
     _git(repo, "config", "user.name", "Phase7")
     spec_dir = repo / "specs" / "tasks"
     spec_dir.mkdir(parents=True)
-    (spec_dir / "review-demo.md").write_text(SPEC.format(limit=limit), encoding="utf-8")
+    (spec_dir / "review-demo.md").write_text(
+        SPEC.format(limit=limit, python_command=PYTHON_COMMAND),
+        encoding="utf-8",
+    )
     (repo / "src").mkdir()
     (repo / "src" / "app.py").write_text("ok\n", encoding="utf-8")
     (repo / "check_app.py").write_text(
@@ -432,6 +439,18 @@ def _run(
     executor=None,
     auto_repair_enabled: bool | None = None,
 ):
+    env = {
+        key: os.environ[key]
+        for key in ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE")
+        if os.environ.get(key)
+    }
+    env.update(
+        {
+            "CODEX_API_KEY": "codex-secret",
+            "REVIEW_CLASSIFIER_API_KEY": "review-secret",
+            "AGENT_PR_PAT": "pr-create-must-not-leak",
+        }
+    )
     return run_review(
         repo_root=repo,
         pull_number=7,
@@ -441,11 +460,7 @@ def _run(
         classifier=classifier,
         executor=executor,
         config=_config(auto_repair_enabled=auto_repair_enabled),
-        env={
-            "CODEX_API_KEY": "codex-secret",
-            "REVIEW_CLASSIFIER_API_KEY": "review-secret",
-            "AGENT_PR_PAT": "pr-create-must-not-leak",
-        },
+        env=env,
     )
 
 

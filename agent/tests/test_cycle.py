@@ -16,6 +16,8 @@ from agent.gitutil import capture_snapshot, collect_changes
 from agent.spec import parse_spec
 from agent.state import ExecutionStatus, new_execution_state
 
+PYTHON_COMMAND = Path(sys.executable).name
+
 SPEC_TEMPLATE = """---
 schema_version: 1
 id: cycle-demo
@@ -63,13 +65,13 @@ Create src/app.py with ok.
 ### Validation
 
 ```text
-python check_app.py
+{python_command} check_app.py
 ```
 
 # Final Verification
 
 ```text
-python check_app.py
+{python_command} check_app.py
 ```
 """
 
@@ -96,7 +98,7 @@ def _init_repo(tmp_path: Path, *, limit: int = 2) -> tuple[Path, Path]:
     )
     spec_path = repo / "spec.md"
     spec_path.write_text(
-        SPEC_TEMPLATE.format(limit=limit),
+        SPEC_TEMPLATE.format(limit=limit, python_command=PYTHON_COMMAND),
         encoding="utf-8",
     )
     _git(repo, "add", "check_app.py", "spec.md")
