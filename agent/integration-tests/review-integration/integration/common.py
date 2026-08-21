@@ -38,7 +38,13 @@ def processed_record(feedback: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def request(spec_path: Path, repo: GitRepo, **event_overrides: Any) -> ReviewRunRequest:
+def request(
+    spec_path: Path,
+    repo: GitRepo,
+    *,
+    auto_repair_enabled: bool | None = None,
+    **event_overrides: Any,
+) -> ReviewRunRequest:
     event_data = {
         "event_name": "check_run",
         "actor": BOT,
@@ -61,6 +67,7 @@ def request(spec_path: Path, repo: GitRepo, **event_overrides: Any) -> ReviewRun
             "GITHUB_TOKEN": "github-write-test-token",
             "GITHUB_REPOSITORY": "example/phase7",
         },
+        auto_repair_enabled=auto_repair_enabled,
     )
 
 

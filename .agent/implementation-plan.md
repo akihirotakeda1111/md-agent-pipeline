@@ -19,7 +19,7 @@ Scope Check・Validation・Repair・Commit・PR・CodeRabbitレビュー修正�
 | 4 | Scope, Validation & Repair | 3 | Git差分制約・Validation・Repair Loop |
 | 5 | GitHub Actions Execution | 4 | MD投入からTask単位で安全に実行 |
 | 6 | Git, PR, Restart / GitHub Reconciliation & Observability | 5 | Commit/Push/PR・Restart / GitHub Reconciliation・可観測性 |
-| 7 | CodeRabbit Review Loop | 6 | 非同期レビュー分類・Codex修正ループ |
+| 7 | CodeRabbit Review Loop | 6 | 非同期レビュー分類。MVPは人間handoff。Repairはfeature-gated |
 
 ---
 
@@ -81,7 +81,8 @@ Classification
   ↓
 Policy
   ↓
-Codex Repair
+MVP: HUMAN_HANDOFF
+(auto_repair_enabled=true のときだけ Codex Repair)
 ```
 
 ---

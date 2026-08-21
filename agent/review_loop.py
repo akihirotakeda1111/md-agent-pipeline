@@ -47,7 +47,11 @@ from agent.pr import parse_work_unit_marker
 from agent.review_classify import classify_review_comment
 from agent.review_collect import collect_review_feedback, head_sha_from_pull
 from agent.review_filter import applies_to_current_head, prefilter_reason
-from agent.review_policy import decide_review_policy
+from agent.review_policy import (
+    AUTO_REPAIR_DEFERRED_HUMAN_ACTION,
+    AUTO_REPAIR_DEFERRED_REASON,
+    decide_review_policy,
+)
 from agent.review_prepare import find_spec_by_id
 from agent.review_prompt import build_review_repair_prompt
 from agent.review_terminal import (
@@ -205,9 +209,7 @@ def _run_review(
         client, pull_number, spec, track_author=cfg.review.track_author
     )
     terminal = collect_coderabbit_terminal(client, head_sha_expected, cfg.coderabbit)
-    sticky = _sticky_terminal_result(
-        client, spec, pull_number, track, head_sha_expected, terminal
-    )
+    sticky = _sticky_terminal_result(client, spec, pull_number, track, head_sha_expected, terminal)
     if sticky is not None:
         return sticky
     if terminal.is_escalating():
@@ -223,9 +225,7 @@ def _run_review(
         )
     if not terminal.is_completed():
         apply_status_label(client, pull_number, "agent:review")
-        return _in_review(
-            spec, pull_number, track, _waiting_for_coderabbit_message(terminal)
-        )
+        return _in_review(spec, pull_number, track, _waiting_for_coderabbit_message(terminal))
     apply_status_label(client, pull_number, "agent:review")
     items = collect_review_feedback(client, pull_number, actor=cfg.coderabbit.actor)
     emit(
@@ -333,7 +333,10 @@ def _run_review(
             extra=result.to_json_dict(),
         )
         decision = decide_review_policy(
-            result, spec, confidence_threshold=cfg.review.confidence_threshold
+            result,
+            spec,
+            confidence_threshold=cfg.review.confidence_threshold,
+            auto_repair_enabled=cfg.review.auto_repair_enabled,
         )
         emit(
             REVIEW_POLICY_APPLIED,
@@ -352,6 +355,7 @@ def _run_review(
             if decision.action is ReviewPolicyAction.ESCALATE
         ]
         updated = with_processed(track, identities, increment=False)
+        deferred = AUTO_REPAIR_DEFERRED_REASON in reasons
         return _escalate(
             client,
             spec,
@@ -361,6 +365,7 @@ def _run_review(
             "REVIEW_POLICY_ESCALATED",
             track_id=track_id,
             head_sha=head_sha_expected,
+            required_human_action=AUTO_REPAIR_DEFERRED_HUMAN_ACTION if deferred else None,
         )
 
     accepted = [
@@ -772,6 +777,7 @@ def _escalate(
     *,
     track_id: int | None,
     head_sha: str,
+    required_human_action: str | None = None,
 ) -> ReviewResult:
     bound = with_processed(track, (), increment=False, head_sha=head_sha)
     persist_review_track(client, pull_number, track_id, bound)
@@ -782,7 +788,8 @@ def _escalate(
         reason=message,
         last_validation=None,
         repair_attempts=track.review_attempts,
-        required_human_action=(
+        required_human_action=required_human_action
+        or (
             "Inspect the review classification and decide whether to change "
             "the Task Spec or the implementation."
         ),

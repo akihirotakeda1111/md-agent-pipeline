@@ -10,7 +10,7 @@ class GitRepository:
         self.root = root
 
     @classmethod
-    def clone(cls, repo: str, root: Path) -> "GitRepository":
+    def clone(cls, repo: str, root: Path) -> GitRepository:
         run(["gh", "repo", "clone", repo, str(root), "--", "--filter=blob:none"])
         result = cls(root)
         result.git("config", "user.name", "Phase 7 E2E")

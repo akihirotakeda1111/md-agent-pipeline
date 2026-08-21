@@ -6,7 +6,6 @@ import json
 import re
 import secrets
 import shutil
-import sys
 import tempfile
 import time
 from dataclasses import replace
@@ -49,7 +48,6 @@ from harness.workflow import (
     triggers,
 )
 
-
 SUITE = Path(__file__).resolve().parent
 EXECUTE_WORKFLOW = "agent-execute.yml"
 REVIEW_WORKFLOW = "agent-review.yml"
@@ -61,7 +59,9 @@ TRACKING_MARKER = "<!-- md-agent-review-state"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Real GitHub Phase 7 review E2E suite")
     parser.add_argument("--repo", required=True, help="OWNER/REPO containing Production workflows")
-    parser.add_argument("--base-branch", help="Origin branch; defaults to repository default branch")
+    parser.add_argument(
+        "--base-branch", help="Origin branch; defaults to repository default branch"
+    )
     parser.add_argument("--unique-id", help="Safe unique suffix; generated when omitted")
     parser.add_argument("--trigger", choices=("auto", "push", "workflow_dispatch"), default="push")
     parser.add_argument(
@@ -290,7 +290,9 @@ def classify_unhandled(exc: BaseException) -> ClassifiedFailure:
         return ProductionBug(str(exc) or "Production acceptance assertion failed")
     if isinstance(exc, CommandError):
         text = f"{exc.stdout}\n{exc.stderr}".lower()
-        if any(token in text for token in ("authentication", "permission", "forbidden", "401", "403")):
+        if any(
+            token in text for token in ("authentication", "permission", "forbidden", "401", "403")
+        ):
             return EnvironmentBlocker(str(exc))
         if any(token in text for token in ("rate limit", "http 5", "timed out", "timeout")):
             return ExternalServiceBlocker(str(exc))
@@ -390,9 +392,7 @@ def main() -> int:
             execute_doc = load_workflow(
                 repository.root / ".github" / "workflows" / EXECUTE_WORKFLOW
             )
-            review_doc = load_workflow(
-                repository.root / ".github" / "workflows" / REVIEW_WORKFLOW
-            )
+            review_doc = load_workflow(repository.root / ".github" / "workflows" / REVIEW_WORKFLOW)
             trigger, trigger_definitions = choose_execute_trigger(
                 execute_doc, args.trigger, scenario.source_branch, scenario.task_spec
             )
@@ -469,9 +469,7 @@ def main() -> int:
             )
             execute_data = github.wait_attempt(int(discovered["id"]), args.execute_timeout_seconds)
             execute_run = github.run_evidence(execute_data)
-            assert_execute_run(
-                execute_run, execute_workflow, scenario, source_sha, trigger
-            )
+            assert_execute_run(execute_run, execute_workflow, scenario, source_sha, trigger)
             report["execute"] = run_dict(execute_run)
 
             pr = wait_for_one_pr(github, scenario, args.discovery_timeout_seconds)
@@ -629,7 +627,10 @@ def main() -> int:
                     and run_matches_current_head(latest_review_run, current_head)
                 ):
                     raise ProductionBug(
-                        f"Production {state} on the current HEAD did not match review run structured events",
+                        (
+                            f"Production {state} on the current HEAD did not match "
+                            "review run structured events"
+                        ),
                         evidence={
                             "labels": list(updated.labels),
                             "events": all_events,
@@ -637,10 +638,7 @@ def main() -> int:
                             "failure_kind": "UNMATCHED_PRODUCTION_TERMINAL",
                         },
                     )
-                if (
-                    latest_review_run is not None
-                    and latest_review_run.conclusion == "failure"
-                ):
+                if latest_review_run is not None and latest_review_run.conclusion == "failure":
                     raise ProductionBug(
                         "review workflow failed without a Production READY/ESCALATED terminal",
                         evidence={

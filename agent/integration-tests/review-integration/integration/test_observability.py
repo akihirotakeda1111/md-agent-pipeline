@@ -16,7 +16,9 @@ def test_review_repair_emits_contractual_partial_order(
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     events = result.events or services.observations.events
     assert all(isinstance(item, dict) and ("event" in item or "type" in item) for item in events)
     names = event_names(events)

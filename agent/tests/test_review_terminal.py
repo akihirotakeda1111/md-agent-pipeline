@@ -348,11 +348,7 @@ def test_terminal_wakeup_ignores_comment_payloads() -> None:
     assert not is_terminal_wakeup_event(
         {"sender": {"login": "coderabbitai[bot]"}, "state": "pending", "context": "CodeRabbit"}
     )
-    assert is_terminal_wakeup_event(
-        {"check_run": {"status": "completed", "conclusion": "success"}}
-    )
+    assert is_terminal_wakeup_event({"check_run": {"status": "completed", "conclusion": "success"}})
     assert is_terminal_wakeup_event({"state": "success", "context": "CodeRabbit"})
     assert is_terminal_wakeup_event({"state": "failure", "context": "CodeRabbit"})
-    assert not is_terminal_wakeup_event(
-        {"check_run": {"status": "in_progress", "conclusion": ""}}
-    )
+    assert not is_terminal_wakeup_event({"check_run": {"status": "in_progress", "conclusion": ""}})

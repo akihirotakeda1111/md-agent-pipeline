@@ -41,9 +41,7 @@ def test_same_pr_concurrency_contract(production_root):
         "workflow-level concurrency deadlocks the review job on the same group"
     )
     prepare = workflow["jobs"]["prepare"]
-    assert prepare.get("concurrency") in (None, {}), (
-        "prepare must not take a concurrency lock"
-    )
+    assert prepare.get("concurrency") in (None, {}), "prepare must not take a concurrency lock"
     review = workflow["jobs"]["review"]
     concurrency = review.get("concurrency")
     assert isinstance(concurrency, dict), "review job must define PR-scoped concurrency"

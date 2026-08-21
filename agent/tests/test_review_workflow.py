@@ -87,15 +87,9 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
     assert workspace["with"]["persist-credentials"] is False
     assert workspace["with"]["fetch-depth"] == 0
     assert "path" not in workspace["with"]
-    install = next(
-        step
-        for step in review["steps"]
-        if "pip install" in str(step.get("run", ""))
-    )
+    install = next(step for step in review["steps"] if "pip install" in str(step.get("run", "")))
     assert "${{ runner.temp }}/orchestrator" in install["run"]
-    assert "pip install -e ." not in install["run"].replace(
-        "${{ runner.temp }}/orchestrator", ""
-    )
+    assert "pip install -e ." not in install["run"].replace("${{ runner.temp }}/orchestrator", "")
     secret_steps = [step for step in review["steps"] if "CODEX_API_KEY" in yaml.safe_dump(step)]
     assert len(secret_steps) == 1
     env = secret_steps[0]["env"]

@@ -3,8 +3,9 @@
 ## Objective
 
 PR作成後に非同期で発生するCodeRabbit feedbackを検知し、
-未処理レビューだけを収集・分類・Policy評価し、
-安全な指摘だけをCodexへ修正させる。
+未処理レビューだけを収集・分類・Policy評価する。
+MVPでは自動Repairを意図的に延期し、CodeRabbitレビュー結果を人間へhandoffする。
+Repair機能は将来拡張として `review.auto_repair_enabled` でfeature-gatedに保持する。
 
 ---
 
@@ -34,16 +35,20 @@ Structured Output Validation
 Deterministic Policy Engine
   ↓
 ACTIONABLE?
-  ├─ no -> ignore/escalate
-  └─ yes
-       ↓
-     Codex Fix
-       ↓
-     Scope Check
-       ↓
-     Validation
-       ↓
-     Commit / Push
+  ├─ NON_ACTIONABLE -> READY_FOR_HUMAN
+  ├─ OUT_OF_SCOPE / CONFLICTS_WITH_SPEC / UNCERTAIN -> ESCALATED
+  └─ ACTIONABLE
+       ├─ auto_repair_enabled=false (MVP) -> ESCALATED / HUMAN_HANDOFF
+       └─ auto_repair_enabled=true
+            + confidence >= threshold
+            + referencedPaths subset of allowed_paths
+            → Codex Fix
+                 ↓
+               Scope Check
+                 ↓
+               Validation
+                 ↓
+               Commit / Push
 ```
 
 ---
@@ -215,20 +220,17 @@ Codex credentialをreview classifierへ不要に渡さない。
 
 LLM分類を直接execution authorityにしない。
 
-最低限:
+MVP (`review.auto_repair_enabled: false`):
 
 ```text
-ACTIONABLE
-+ confidence >= threshold
-+ referencedPaths subset of allowed_paths
-→ Codex Fix
-
-ACTIONABLE
-+ low confidence
-→ ESCALATED
-
 NON_ACTIONABLE
-→ mark processed / ignore
+→ READY_FOR_HUMAN
+
+ACTIONABLE
+→ ESCALATED / HUMAN_HANDOFF
+  reason: automatic review repair is deferred
+  Codex Repair は confidence に関係なく実行しない
+  review_attempts は増やさない
 
 OUT_OF_SCOPE
 → ESCALATED
@@ -240,9 +242,28 @@ UNCERTAIN
 → ESCALATED
 ```
 
+将来有効化する Repair 経路 (`review.auto_repair_enabled: true`):
+
+```text
+ACTIONABLE
++ confidence >= threshold
++ referencedPaths subset of allowed_paths
+→ Codex Fix
+
+ACTIONABLE
++ low confidence
+→ ESCALATED
+```
+
+MVPでは自動Repairを意図的に延期し、CodeRabbitレビュー結果を人間へhandoffする。
+Repair機能は将来拡張としてfeature-gatedで保持する。
+
 ---
 
 ## Review Repair Loop
+
+Repair コードは削除しない。`review.auto_repair_enabled: true` のときだけ使う。
+MVP ではこのループへ入らない。
 
 1 Review Attempt:
 
@@ -331,7 +352,8 @@ READY_FOR_HUMAN
 - forbidden path review
 - valid structured classification
 - invalid classifier JSON
-- ACTIONABLE high confidence
+- ACTIONABLE high confidence（`auto_repair_enabled=false` → ESCALATED、Codex未実行）
+- ACTIONABLE high confidence（`auto_repair_enabled=true` → 既存 FIX 経路）
 - ACTIONABLE low confidence
 - NON_ACTIONABLE
 - OUT_OF_SCOPE
@@ -353,7 +375,8 @@ LLM APIはmock可能にする。
 - semantic classifierがStructured Outputを返す
 - classifier結果をschema validationする
 - deterministic policyを必ず通す
-- CodexへACTIONABLEな指摘だけを渡す
+- MVPでは ACTIONABLE を人間へhandoffし、Codex Repairを実行しない
+- `auto_repair_enabled=true` のときだけ CodexへACTIONABLEな指摘を渡す
 - review fix後もScope Checkする
 - Review Limitを超えない
 - Spec conflict / low confidenceをEscalateする
@@ -380,7 +403,8 @@ CodeRabbit
   ↓
 Review Policy
   ↓
-Codex Review Fix
+MVP: HUMAN_HANDOFF
+(auto_repair_enabled=true のときだけ Codex Review Fix)
   ↓
 Human Merge
 ```

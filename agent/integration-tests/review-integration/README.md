@@ -1,6 +1,6 @@
 # Phase 7 CodeRabbit review integration tests
 
-Phase 7仕様を Source of Truth として、本番の `prepare_review()` / `run_review()` と `.github/workflows/agent-review.yml` を通す独立結合テストです。Real Codex と Real GitHub API、Real CodeRabbit、Real GitHub Actions は起動しません。実 Git（一時 repository / bare remote）と Fake Classifier / Fake Codex / Fake GitHub で、wake-up 再取得、pre-filter、分類、Policy、bounded review repair、収束、観測契約を検証します。
+Phase 7仕様を Source of Truth として、本番の `prepare_review()` / `run_review()` と `.github/workflows/agent-review.yml` を通す独立結合テストです。Real Codex と Real GitHub API、Real CodeRabbit、Real GitHub Actions は起動しません。実 Git（一時 repository / bare remote）と Fake Classifier / Fake Codex / Fake GitHub で、wake-up 再取得、pre-filter、分類、Policy、feature-gated review repair、収束、観測契約を検証します。MVP では自動Repairを意図的に延期し、CodeRabbitレビュー結果を人間へhandoffします。Repair機能は `auto_repair_enabled=true` のケースで将来拡張として保持します。
 
 通常利用者は pytest を直接操作せず、repository root から `run.py` を実行します。
 
@@ -54,9 +54,12 @@ GitHub event（CodeRabbit terminal wake-up のみ: check_run completed / status�
        -> deterministic pre-filter
        -> Structured Output classifier + schema validation
        -> deterministic policy
-       -> ACTIONABLE?  no -> ignore / escalate / IN_REVIEW / READY_FOR_HUMAN
-                    yes -> Codex fix -> Scope -> all Task Validation -> FV
-                         -> commit -> push
+       -> NON_ACTIONABLE -> READY_FOR_HUMAN
+       -> OUT_OF_SCOPE / CONFLICTS_WITH_SPEC / UNCERTAIN -> ESCALATED
+       -> ACTIONABLE + auto_repair_enabled=false (MVP) -> ESCALATED / HUMAN_HANDOFF（Codex なし）
+       -> ACTIONABLE + auto_repair_enabled=true + confidence + scope
+            -> Codex fix -> Scope -> all Task Validation -> FV
+            -> commit -> push
        READY は CODERABBIT_COMPLETED + current HEAD + 未処理 ACTIONABLE なし のみ
 ```
 
@@ -73,10 +76,10 @@ workflow YAML は構造解析のみです。`agent-review.yml` は execute workf
 | R01〜R04F | intake / prefilter | wake-up 再取得、actor、PR number / work-unit / HEAD、stale event SHA、obsolete head、forbidden path |
 | R03N | identity | event PR number ≠ API PR number。classifier / Codex / commit / push なし。READY にしない |
 | R03H | identity | event SHA ≠ current `pull.head.sha`。classifier / Codex なし |
-| R05〜R11 | classifier / policy | schema、confidence、5 enum、allowed / referenced paths |
-| R12〜R16 | repair | Codex、Scope、全 Task Validation、FV、commit/push、attempt limit |
+| R05〜R11 | classifier / policy | schema、confidence、5 enum、allowed / referenced paths。R05D/R07D は MVP `auto_repair_enabled=false` |
+| R12〜R16 | repair | `auto_repair_enabled=true` のとき Codex、Scope、全 Task Validation、FV、commit/push、attempt limit |
 | R17〜R21 | identity / convergence | duplicate、edited revision、pending current-HEAD、READY |
-| R25〜R30 | terminal | COMPLETED+0/NON_ACTIONABLE → READY、COMPLETED+ACTIONABLE → repair、SKIPPED → ESCALATED、terminalなし+0 → IN_REVIEW、old HEAD無視 |
+| R25〜R30 | terminal | COMPLETED+0/NON_ACTIONABLE → READY、COMPLETED+ACTIONABLE（flag on）→ repair、SKIPPED → ESCALATED、terminalなし+0 → IN_REVIEW、old HEAD無視 |
 | R22〜R24 | observability | 必須イベントの存在と有意な部分順序 |
 | W01〜W07 | workflow / security | 非同期 trigger、concurrency、最小権限（review の checks: read / statuses: read）、checkout、credential 配置、Codex Action の bot allowlist、subprocess 隔離 |
 | H01〜H03 | harness | 実 Git、dumb Fake、JSONL observations |

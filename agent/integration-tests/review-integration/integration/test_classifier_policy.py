@@ -24,7 +24,9 @@ def test_actionable_high_confidence_allowed_path_runs_repair(
         classifier=[classification("ACTIONABLE", confidence=0.93)],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "REVIEW_FIX_PUSHED")
     assert len(services.classifier.invocations) == 1
     assert len(services.codex.invocations) == 1
@@ -39,7 +41,9 @@ def test_actionable_low_confidence_escalates_without_codex(
         ),
         classifier=[classification("ACTIONABLE", confidence=0.79)],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "ESCALATED")
     assert_no_codex(services)
 
@@ -53,8 +57,46 @@ def test_actionable_referenced_path_outside_allowed_scope_escalates_without_code
         ),
         classifier=[classification("ACTIONABLE", paths=("docs/README.md",))],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "ESCALATED")
+    assert_no_codex(services)
+
+
+def test_auto_repair_disabled_actionable_escalates_without_codex(
+    phase7_driver, spec_path, git_repo, service_factory
+):
+    services = service_factory(
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
+        classifier=[classification("ACTIONABLE", confidence=0.93)],
+        codex=[CodexStep({"app/review.txt": "repaired\n"})],
+    )
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=False), services
+    )
+    require_status(result, "ESCALATED")
+    assert result.review_attempts == 0
+    assert "deferred" in (result.summary or "").lower()
+    assert_no_codex(services)
+
+
+def test_auto_repair_disabled_non_actionable_is_ready(
+    phase7_driver, spec_path, git_repo, service_factory
+):
+    feedback = current_feedback(git_repo, "non-actionable-current.json")
+    services = service_factory(
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
+        classifier=[classification("NON_ACTIONABLE", paths=())],
+        codex=[CodexStep({"app/review.txt": "repaired\n"})],
+    )
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=False), services
+    )
+    require_status(result, "READY_FOR_HUMAN")
+    assert result.review_attempts == 0
     assert_no_codex(services)
 
 

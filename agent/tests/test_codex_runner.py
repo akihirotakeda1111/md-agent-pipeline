@@ -158,7 +158,12 @@ def test_mock_codex_success(tmp_path: Path) -> None:
         spec,
         task,
         repo_root=REPO_ROOT,
-        env={"PATH": "/bin", "CODEX_API_KEY": "codex-secret", "GITHUB_TOKEN": "nope", "AGENT_PR_PAT": "pr-pat"},
+        env={
+            "PATH": "/bin",
+            "CODEX_API_KEY": "codex-secret",
+            "GITHUB_TOKEN": "nope",
+            "AGENT_PR_PAT": "pr-pat",
+        },
         executor=executor,
     )
 

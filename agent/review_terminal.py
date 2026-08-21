@@ -34,9 +34,7 @@ KIND_NONE = "NONE"
 
 CHECK_SUCCESS = "success"
 CHECK_SKIPPED_CONCLUSIONS = frozenset({"skipped", "cancelled", "neutral"})
-CHECK_FAILED_CONCLUSIONS = frozenset(
-    {"failure", "timed_out", "action_required", "stale", "error"}
-)
+CHECK_FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "action_required", "stale", "error"})
 CHECK_ACTIVE_STATUSES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 STATUS_SUCCESS = "success"
 STATUS_FAILED_STATES = frozenset({"failure", "error"})

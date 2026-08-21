@@ -9,7 +9,6 @@ import yaml
 
 from .models import EnvironmentBlocker, ProductionBug
 
-
 REQUIRED_FILES = (
     ".agent/bootstrap.md",
     ".agent/contracts/security.md",
@@ -41,8 +40,12 @@ def inspect_source_contracts(
     except (OSError, json.JSONDecodeError) as exc:
         raise ProductionBug(f"cannot parse agent/config.json: {exc}") from exc
     actor = str((config.get("coderabbit") or {}).get("actor") or "").strip()
-    check_app_slug = str((config.get("coderabbit") or {}).get("check_app_slug") or "coderabbitai").strip()
-    status_context = str((config.get("coderabbit") or {}).get("status_context") or "CodeRabbit").strip()
+    check_app_slug = str(
+        (config.get("coderabbit") or {}).get("check_app_slug") or "coderabbitai"
+    ).strip()
+    status_context = str(
+        (config.get("coderabbit") or {}).get("status_context") or "CodeRabbit"
+    ).strip()
     classifier_model = str((config.get("review") or {}).get("classifier_model") or "").strip()
     track_author = str((config.get("review") or {}).get("track_author") or "").strip()
     if not actor:
@@ -99,9 +102,7 @@ def inspect_source_contracts(
     files = [root / relative for relative in REQUIRED_FILES]
     return {
         "files": [str(path.relative_to(root)).replace("\\", "/") for path in files],
-        "sha256": {
-            str(path.relative_to(root)).replace("\\", "/"): _digest(path) for path in files
-        },
+        "sha256": {str(path.relative_to(root)).replace("\\", "/"): _digest(path) for path in files},
         "coderabbit_actor": actor,
         "coderabbit_check_app_slug": check_app_slug,
         "coderabbit_status_context": status_context,

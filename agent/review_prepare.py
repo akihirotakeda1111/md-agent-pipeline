@@ -12,12 +12,12 @@ from agent.errors import AgentError
 from agent.github_api import GitHubClient, github_client_from_env
 from agent.pr import is_same_work_unit_pull, parse_work_unit_marker
 from agent.review_collect import head_repo_full_name, head_sha_from_pull
-from agent.spec import TaskSpec, parse_spec, parse_spec_text
 from agent.review_terminal import (
     event_commit_sha,
     has_coderabbit_event_identity,
     is_terminal_wakeup_event,
 )
+from agent.spec import TaskSpec, parse_spec, parse_spec_text
 
 
 @dataclass(frozen=True)
@@ -295,7 +295,10 @@ def _resolve_pull_number_from_sha(client: GitHubClient, payload: dict[str, Any])
     if not sha:
         return None
     check_run = payload.get("check_run")
-    if isinstance(check_run, dict) and len(_unique_pull_numbers(check_run.get("pull_requests"))) > 1:
+    if (
+        isinstance(check_run, dict)
+        and len(_unique_pull_numbers(check_run.get("pull_requests"))) > 1
+    ):
         return None
     open_pulls = [
         item

@@ -33,7 +33,9 @@ def test_repair_runs_scope_all_validation_final_verification_then_push(
 ):
     services = actionable_services(service_factory, git_repo, {"app/review.txt": "repaired\n"})
     before = snapshot(git_repo)
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "REVIEW_FIX_PUSHED")
     assert result.review_attempts == 1
     assert_linear_push(before, git_repo)
@@ -49,7 +51,9 @@ def test_attempt_limit_escalates_before_codex(phase7_driver, spec_path, git_repo
         ),
         classifier=[classification("ACTIONABLE")],
     )
-    review_request = replace(request(spec_path, git_repo), review_attempts=1)
+    review_request = replace(
+        request(spec_path, git_repo, auto_repair_enabled=True), review_attempts=1
+    )
     result = phase7_driver.run_review(review_request, services)
     require_status(result, "ESCALATED")
     assert_no_codex(services)
@@ -61,7 +65,9 @@ def test_scope_violation_does_not_commit_or_push(
 ):
     services = actionable_services(service_factory, git_repo, {"docs/outside.txt": "forbidden\n"})
     before = snapshot(git_repo)
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "ESCALATED")
     assert_no_git_write(before, git_repo)
 
@@ -75,7 +81,9 @@ def test_task_validation_failure_does_not_commit_or_push(
         {"app/review.txt": "repaired\n", "app/task-two.txt": "broken\n"},
     )
     before = snapshot(git_repo)
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     assert result.status.upper() in {"FAILED", "ESCALATED"}
     assert_no_git_write(before, git_repo)
 
@@ -85,6 +93,8 @@ def test_final_verification_failure_does_not_commit_or_push(
 ):
     services = actionable_services(service_factory, git_repo, {"app/review.txt": "not-repaired\n"})
     before = snapshot(git_repo)
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     assert result.status.upper() in {"FAILED", "ESCALATED"}
     assert_no_git_write(before, git_repo)

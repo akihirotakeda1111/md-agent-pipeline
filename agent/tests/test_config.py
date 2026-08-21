@@ -23,6 +23,7 @@ def test_load_default_config() -> None:
     assert config.retry.repair_attempt_limit == 3
     assert config.retry.review_attempt_limit == 3
     assert config.review.confidence_threshold == 0.80
+    assert config.review.auto_repair_enabled is False
     assert config.review.api_key_env == "REVIEW_CLASSIFIER_API_KEY"
     assert config.review.track_author == "github-actions[bot]"
     assert config.review.max_comments_per_run is None
@@ -56,6 +57,23 @@ def test_load_config_from_explicit_path(tmp_path: Path) -> None:
     assert config.coderabbit.actor == "review-bot"
     assert config.coderabbit.check_app_slug == "coderabbitai"
     assert config.coderabbit.status_context == "CodeRabbit"
+    assert config.review.auto_repair_enabled is False
+
+
+def test_auto_repair_enabled_can_be_turned_on(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "task_spec": {"directory": "specs/tasks"},
+                "state": {"directory": ".agent/state"},
+                "review": {"auto_repair_enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(path).review.auto_repair_enabled is True
 
 
 def test_missing_config_file_is_environment_failure(tmp_path: Path) -> None:

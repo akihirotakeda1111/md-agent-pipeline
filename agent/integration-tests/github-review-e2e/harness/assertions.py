@@ -5,7 +5,6 @@ from typing import Any
 
 from .models import PullRequestEvidence, RunEvidence, Scenario, WorkflowInfo
 
-
 REQUIRED_PR_SECTIONS = (
     "Task Spec",
     "Objective",
@@ -25,9 +24,7 @@ def _job_matches(name: str, expected: str) -> bool:
 
 def _matching_jobs(run: RunEvidence, expected: str) -> list[tuple[str, str]]:
     return [
-        (name, conclusion)
-        for name, conclusion in run.jobs.items()
-        if _job_matches(name, expected)
+        (name, conclusion) for name, conclusion in run.jobs.items() if _job_matches(name, expected)
     ]
 
 
@@ -85,9 +82,7 @@ def assert_review_run(
         "issue_comment",
     }
     assert configured_actor
-    assert run.conclusion in {"success", "failure"}, (
-        f"review workflow conclusion: {run.conclusion}"
-    )
+    assert run.conclusion in {"success", "failure"}, f"review workflow conclusion: {run.conclusion}"
     prepare = _matching_jobs(run, "prepare review")
     review = _matching_jobs(run, "review and repair")
     assert len(prepare) == 1 and prepare[0][1] == "success", f"prepare job: {prepare}"
@@ -188,4 +183,6 @@ def assert_linear_head_change(compare: dict[str, object], scenario: Scenario) ->
         if isinstance(file, dict) and "filename" in file
     )
     if files:
-        assert files == [scenario.generated_file], f"review repair changed unexpected files: {files}"
+        assert files == [scenario.generated_file], (
+            f"review repair changed unexpected files: {files}"
+        )

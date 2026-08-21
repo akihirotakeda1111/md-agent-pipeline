@@ -29,9 +29,7 @@ def test_completed_terminal_with_zero_feedback_is_ready(
     assert_no_codex(services)
 
 
-def test_completed_non_actionable_is_ready(
-    phase7_driver, spec_path, git_repo, service_factory
-):
+def test_completed_non_actionable_is_ready(phase7_driver, spec_path, git_repo, service_factory):
     feedback = current_feedback(git_repo, "non-actionable-current.json")
     services = service_factory(
         github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
@@ -52,7 +50,9 @@ def test_completed_actionable_repairs_and_is_not_ready(
         classifier=[classification("ACTIONABLE", confidence=0.93)],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "REVIEW_FIX_PUSHED")
     assert result.status.upper() != "READY_FOR_HUMAN"
     assert len(services.classifier.invocations) == 1
