@@ -234,3 +234,38 @@ def test_protected_paths_are_canonicalized_and_deduplicated(tmp_path: Path) -> N
         ".agent/**",
         ".github/**",
     )
+
+
+@pytest.mark.parametrize("section", ["task_spec", "state"])
+@pytest.mark.parametrize(
+    ("directory", "needle"),
+    [
+        ("/absolute/path", "repository-relative"),
+        ("/specs/tasks", "repository-relative"),
+        ("//server/share", "UNC"),
+        ("\\\\server\\share", "UNC"),
+        ("C:\\path", "Windows drive"),
+        ("../outside", ". or .."),
+        ("directory/../outside", ". or .."),
+    ],
+)
+def test_config_directory_must_be_repository_relative(
+    tmp_path: Path, section: str, directory: str, needle: str
+) -> None:
+    payload = _payload()
+    payload[section] = {"directory": directory}
+    _reject(tmp_path, payload, needle)
+
+
+def test_config_directories_accept_repository_relative_paths(tmp_path: Path) -> None:
+    config = load_config(
+        _write(
+            tmp_path,
+            _payload(
+                task_spec={"directory": "specs/tasks/"},
+                state={"directory": ".agent/state/"},
+            ),
+        )
+    )
+    assert config.task_spec.directory == "specs/tasks"
+    assert config.state.directory == ".agent/state"

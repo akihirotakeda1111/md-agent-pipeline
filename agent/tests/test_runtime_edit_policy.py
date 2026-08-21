@@ -25,6 +25,7 @@ from agent.state import (
     new_execution_state,
     read_state,
     state_file_path,
+    write_state,
 )
 from agent.validation import ValidationRecord
 from agent.workunit import run_work_unit
@@ -645,6 +646,16 @@ def test_current_state_replaced_with_symlink_is_state_tampered(tmp_path: Path) -
     assert (repo / ".agent" / "state" / f"{spec.id}.json").is_symlink()
 
 
+def _plant_valid_state_symlink(repo: Path, spec) -> tuple[Path, Path, str]:
+    state_dir = repo / ".agent" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    decoy = state_dir / "decoy.json"
+    write_state(decoy, new_execution_state(spec))
+    link = state_dir / f"{spec.id}.json"
+    link.symlink_to(decoy)
+    return link, decoy, decoy.read_text(encoding="utf-8")
+
+
 def test_pre_codex_symlink_state_fails_closed(tmp_path: Path) -> None:
     repo, spec_path = _init_repo(tmp_path)
     spec = parse_spec(spec_path)
@@ -668,6 +679,55 @@ def test_pre_codex_symlink_state_fails_closed(tmp_path: Path) -> None:
     assert result.outcome == "SCOPE_VIOLATION"
     assert result.scope is not None
     assert result.scope.reason == "STATE_TAMPERED"
+
+
+def test_persist_true_symlink_to_valid_state_fails_closed_before_io(tmp_path: Path) -> None:
+    repo, spec_path = _init_repo(tmp_path)
+    spec = parse_spec(spec_path)
+    link, decoy, decoy_text = _plant_valid_state_symlink(repo, spec)
+    target_before = os.readlink(link)
+
+    def executor(*_args: object, **_kwargs: object) -> ProcessResult:
+        raise AssertionError("codex must not start")
+
+    result = run_task_cycle(
+        spec_path,
+        repo_root=repo,
+        env=_env(),
+        executor=executor,
+    )
+    assert result.outcome == "SCOPE_VIOLATION"
+    assert result.scope is not None
+    assert result.scope.reason == "STATE_TAMPERED"
+    assert "STATE_TAMPERED" in result.message
+    assert link.is_symlink()
+    assert os.readlink(link) == target_before
+    assert decoy.read_text(encoding="utf-8") == decoy_text
+
+
+def test_work_unit_persist_true_symlink_to_valid_state_fails_closed(tmp_path: Path) -> None:
+    repo, spec_path = _init_repo(tmp_path)
+    spec = parse_spec(spec_path)
+    link, decoy, decoy_text = _plant_valid_state_symlink(repo, spec)
+    target_before = os.readlink(link)
+
+    def executor(*_args: object, **_kwargs: object) -> ProcessResult:
+        raise AssertionError("codex must not start")
+
+    report = run_work_unit(
+        spec_path,
+        repo_root=repo,
+        report_dir=tmp_path / "out",
+        env=_env(),
+        executor=executor,
+        persist_state=True,
+    )
+    assert report.outcome == "SCOPE_VIOLATION"
+    assert "STATE_TAMPERED" in report.message
+    assert report.scope_allowed is False
+    assert link.is_symlink()
+    assert os.readlink(link) == target_before
+    assert decoy.read_text(encoding="utf-8") == decoy_text
 
 
 def test_persist_state_false_does_not_write_state(tmp_path: Path) -> None:
@@ -730,3 +790,133 @@ def test_matching_fingerprint_allows_in_scope_change(tmp_path: Path) -> None:
     assert result.outcome == "TASK_COMPLETED"
     disk = read_state(state_file_path(repo, spec.id))
     assert disk.state is ExecutionStatus.TASK_COMPLETED
+
+
+def test_implementation_exception_after_state_change_is_state_tampered(tmp_path: Path) -> None:
+    repo, spec_path = _init_repo(tmp_path)
+    spec = parse_spec(spec_path)
+
+    def executor(*_args: object, cwd: str, **_kwargs: object) -> ProcessResult:
+        _write_ok(cwd)
+        path = Path(cwd) / ".agent" / "state" / f"{spec.id}.json"
+        path.write_text('{"tampered": true}\n', encoding="utf-8")
+        raise RuntimeError("codex crashed")
+
+    result = run_task_cycle(
+        spec_path,
+        repo_root=repo,
+        env=_env(),
+        executor=executor,
+        persist_state=True,
+    )
+    assert result.outcome == "SCOPE_VIOLATION"
+    assert result.scope is not None
+    assert result.scope.reason == "STATE_TAMPERED"
+    on_disk = (repo / ".agent" / "state" / f"{spec.id}.json").read_text(encoding="utf-8")
+    assert on_disk == '{"tampered": true}\n'
+    assert '"SCOPE_VIOLATION"' not in on_disk
+
+
+def test_repair_exception_after_state_change_is_state_tampered(tmp_path: Path) -> None:
+    repo, spec_path = _init_repo(tmp_path, limit=2)
+    spec = parse_spec(spec_path)
+    calls = {"n": 0}
+
+    def executor(*_args: object, cwd: str, **_kwargs: object) -> ProcessResult:
+        calls["n"] += 1
+        dest = Path(cwd) / "src" / "app.py"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("bad\n", encoding="utf-8")
+        if calls["n"] > 1:
+            path = Path(cwd) / ".agent" / "state" / f"{spec.id}.json"
+            path.write_text('{"tampered": true}\n', encoding="utf-8")
+            raise RuntimeError("repair crashed")
+        return ProcessResult(0, "done", "")
+
+    result = run_task_cycle(
+        spec_path,
+        repo_root=repo,
+        env=_env(),
+        executor=executor,
+        persist_state=True,
+    )
+    assert calls["n"] == 2
+    assert result.outcome == "SCOPE_VIOLATION"
+    assert result.scope is not None
+    assert result.scope.reason == "STATE_TAMPERED"
+    on_disk = (repo / ".agent" / "state" / f"{spec.id}.json").read_text(encoding="utf-8")
+    assert on_disk == '{"tampered": true}\n'
+    assert '"SCOPE_VIOLATION"' not in on_disk
+
+
+def test_work_unit_persist_true_reuses_custom_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent.cycle as cycle_mod
+    import agent.reconcile as reconcile_mod
+
+    repo, spec_path = _init_repo(tmp_path)
+    spec = parse_spec(spec_path)
+    cfg = replace(load_config())
+    loads = {"n": 0}
+
+    def counting_load(*_args: object, **_kwargs: object):
+        loads["n"] += 1
+        raise AssertionError("config must not be reloaded")
+
+    monkeypatch.setattr("agent.workunit.load_config", counting_load)
+    monkeypatch.setattr("agent.cycle.load_config", counting_load)
+    monkeypatch.setattr("agent.codex_runner.load_config", counting_load)
+    monkeypatch.setattr("agent.state.load_config", counting_load)
+
+    seen_configs: list[object] = []
+    seen_policies: list[object] = []
+
+    def _record_config(args: tuple[object, ...], kwargs: dict[str, object]) -> object:
+        if "config" in kwargs:
+            return kwargs["config"]
+        if len(args) >= 3:
+            return args[2]
+        return None
+
+    orig_cycle_sfp = cycle_mod.state_file_path
+    orig_reconcile_sfp = reconcile_mod.state_file_path
+    orig_scope = cycle_mod.check_scope
+
+    def wrap_cycle_sfp(*args: object, **kwargs: object):
+        seen_configs.append(_record_config(args, kwargs))
+        return orig_cycle_sfp(*args, **kwargs)
+
+    def wrap_reconcile_sfp(*args: object, **kwargs: object):
+        seen_configs.append(_record_config(args, kwargs))
+        return orig_reconcile_sfp(*args, **kwargs)
+
+    def wrap_scope(spec_obj: object, changes: object, runtime_policy: object):
+        seen_policies.append(runtime_policy)
+        return orig_scope(spec_obj, changes, runtime_policy)
+
+    monkeypatch.setattr("agent.cycle.state_file_path", wrap_cycle_sfp)
+    monkeypatch.setattr("agent.reconcile.state_file_path", wrap_reconcile_sfp)
+    monkeypatch.setattr("agent.cycle.check_scope", wrap_scope)
+
+    def executor(*_args: object, cwd: str, **_kwargs: object) -> ProcessResult:
+        _write_ok(cwd)
+        return ProcessResult(0, "done", "")
+
+    report = run_work_unit(
+        spec_path,
+        repo_root=repo,
+        report_dir=tmp_path / "out",
+        config=cfg,
+        env=_env(),
+        executor=executor,
+        persist_state=True,
+    )
+    assert report.outcome == "FINAL_VERIFICATION_PASSED"
+    assert loads["n"] == 0
+    assert seen_configs
+    assert all(item is cfg for item in seen_configs)
+    assert seen_policies
+    assert all(item is cfg.runtime_edit_policy for item in seen_policies)
+    disk = read_state(state_file_path(repo, spec.id, config=cfg))
+    assert disk.task_id == spec.id

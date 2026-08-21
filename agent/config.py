@@ -125,8 +125,14 @@ def load_config(path: Path | str | None = None) -> AgentConfig:
 def _parse_config(payload: dict[str, Any]) -> AgentConfig:
     task_spec = _require_object(payload, "task_spec")
     state = _require_object(payload, "state")
-    task_spec_directory = _require_non_empty_str(task_spec, "directory", "task_spec")
-    state_directory = _require_non_empty_str(state, "directory", "state")
+    task_spec_directory = _canonicalize_repo_relative_posix(
+        _require_non_empty_str(task_spec, "directory", "task_spec"),
+        field="task_spec.directory",
+    )
+    state_directory = _canonicalize_repo_relative_posix(
+        _require_non_empty_str(state, "directory", "state"),
+        field="state.directory",
+    )
     runtime_edit_policy = _parse_runtime_edit_policy(
         payload,
         task_spec_directory=task_spec_directory,
@@ -253,23 +259,33 @@ def _canonicalize_protected_pattern(value: Any) -> str:
     field = "runtime_edit_policy.protected_paths"
     if not isinstance(value, str) or not value.strip():
         raise AgentError.invalid_input(f"{field} entries must be non-empty strings")
+    return _canonicalize_repo_relative_posix(value, field=field)
+
+
+def _canonicalize_repo_relative_posix(value: str, *, field: str) -> str:
+    """Normalize a repository-relative path or glob without stripping a leading slash.
+
+    Order: trim whitespace, convert backslashes to POSIX separators, then reject
+    absolute / drive / UNC / empty / ``.`` / ``..`` segments. Only a trailing
+    slash is removed after those checks.
+    """
     raw = value.strip()
-    if _is_windows_drive_path(raw):
-        raise AgentError.invalid_input(f"{field} must not contain a Windows drive path: {value}")
-    if _is_unc_path(raw):
-        raise AgentError.invalid_input(f"{field} must not contain a UNC path: {value}")
-    if raw.startswith("/"):
-        raise AgentError.invalid_input(f"{field} must be repository-relative: {value}")
+    if not raw:
+        raise AgentError.invalid_input(f"{field} must be a non-empty string")
 
     normalized = raw.replace("\\", "/")
-    if _is_windows_drive_path(normalized) or _is_unc_path(normalized) or normalized.startswith("/"):
+    if _is_windows_drive_path(raw) or _is_windows_drive_path(normalized):
+        raise AgentError.invalid_input(f"{field} must not contain a Windows drive path: {value}")
+    if _is_unc_path(raw) or _is_unc_path(normalized):
+        raise AgentError.invalid_input(f"{field} must not contain a UNC path: {value}")
+    if raw.startswith("/") or normalized.startswith("/"):
         raise AgentError.invalid_input(f"{field} must be repository-relative: {value}")
 
     parts = normalized.split("/")
     if parts and parts[-1] == "":
         parts = parts[:-1]
     if not parts or any(part == "" for part in parts):
-        raise AgentError.invalid_input(f"{field} must be a repository-relative pattern: {value}")
+        raise AgentError.invalid_input(f"{field} must be repository-relative: {value}")
     if any(part in {".", ".."} for part in parts):
         raise AgentError.invalid_input(f"{field} must not contain . or .. path segments: {value}")
     return "/".join(parts)
@@ -308,7 +324,7 @@ def _assert_required_protection(
 def _directory_is_recursively_protected(directory: str, patterns: tuple[str, ...]) -> bool:
     from agent.scope import path_matches
 
-    rel = directory.replace("\\", "/").strip().strip("/")
+    rel = directory
     if not rel or rel.startswith("/") or _is_windows_drive_path(rel) or _is_unc_path(rel):
         return False
     child = f"{rel}/__runtime_policy_child__"

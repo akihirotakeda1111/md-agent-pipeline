@@ -5,7 +5,7 @@ Does not commit, push, or open pull requests.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,7 @@ from agent.state import (
     ExecutionStatus,
     StateFileFingerprint,
     apply_transition,
+    assert_current_state_regular_or_absent,
     current_state_relpath,
     fingerprint_state_file,
     init_state,
@@ -103,6 +104,7 @@ def load_or_init_state(
     config: AgentConfig | None = None,
 ) -> ExecutionState:
     path = state_file_path(repo_root, spec.id, config=config)
+    assert_current_state_regular_or_absent(path)
     if path.exists():
         return read_state(path)
     return init_state(spec, repo_root, config=config)
@@ -141,6 +143,11 @@ def run_task_cycle(
     validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     rest_env, api_key = detach_codex_api_key(env, api_key_env=cfg.codex.api_key_env)
     snapshot = capture_snapshot(root)
+    unsafe = _reject_unsafe_current_state(
+        parsed, root, cfg, snapshot.base_sha, provided_state=state
+    )
+    if unsafe is not None:
+        return unsafe
     if state is not None:
         current = state
     elif persist_state:
@@ -182,16 +189,27 @@ def run_task_cycle(
             snapshot.base_sha,
             current_state_relpath(parsed.id, cfg),
         )
-    implement = run_codex(
+    implement = _invoke_codex_with_fingerprint(
         parsed,
         selected,
-        repo_root=root,
-        config=cfg,
-        env=attach_codex_api_key(rest_env, api_key, api_key_env=cfg.codex.api_key_env),
-        executor=executor,
-        stage="implementation",
-        attempt=0,
+        current,
+        root,
+        cfg,
+        snapshot.base_sha,
+        pre_fingerprint,
+        lambda: run_codex(
+            parsed,
+            selected,
+            repo_root=root,
+            config=cfg,
+            env=attach_codex_api_key(rest_env, api_key, api_key_env=cfg.codex.api_key_env),
+            executor=executor,
+            stage="implementation",
+            attempt=0,
+        ),
     )
+    if isinstance(implement, CycleResult):
+        return implement
     emit(
         CODEX_COMPLETED,
         "codex implementation completed",
@@ -635,17 +653,28 @@ def _validate_and_maybe_repair(
             base_sha,
             current_state_relpath(spec.id, cfg),
         )
-    repair_run = run_codex(
+    repair_run = _invoke_codex_with_fingerprint(
         spec,
         task,
-        repo_root=root,
-        config=cfg,
-        env=attach_codex_api_key(env, api_key, api_key_env=cfg.codex.api_key_env),
-        executor=executor,
-        prompt=prompt,
-        stage="repair",
-        attempt=state.repair_attempts,
+        state,
+        root,
+        cfg,
+        base_sha,
+        pre_fingerprint,
+        lambda: run_codex(
+            spec,
+            task,
+            repo_root=root,
+            config=cfg,
+            env=attach_codex_api_key(env, api_key, api_key_env=cfg.codex.api_key_env),
+            executor=executor,
+            prompt=prompt,
+            stage="repair",
+            attempt=state.repair_attempts,
+        ),
     )
+    if isinstance(repair_run, CycleResult):
+        return repair_run
     emit(
         CODEX_COMPLETED,
         "codex repair completed",
@@ -669,6 +698,56 @@ def _validate_and_maybe_repair(
         stage="repair",
         attempt=state.repair_attempts,
     )
+
+
+def _reject_unsafe_current_state(
+    spec: TaskSpec,
+    root: Path,
+    cfg: AgentConfig,
+    base_sha: str,
+    *,
+    provided_state: ExecutionState | None,
+) -> CycleResult | None:
+    """Inspect current state with lstat before any load/persist/Codex."""
+    path = state_file_path(root, spec.id, config=cfg)
+    fingerprint = fingerprint_state_file(path)
+    if not fingerprint.exists or fingerprint.file_type == "regular":
+        return None
+    current = provided_state if provided_state is not None else new_execution_state(spec)
+    selected = select_next_task(spec, current)
+    if selected is None:
+        selected = spec.tasks[0]
+    return _state_tampered_result(
+        spec, selected, current, base_sha, current_state_relpath(spec.id, cfg)
+    )
+
+
+def _invoke_codex_with_fingerprint(
+    spec: TaskSpec,
+    task: SpecTask,
+    state: ExecutionState,
+    root: Path,
+    cfg: AgentConfig,
+    base_sha: str,
+    pre_fingerprint: StateFileFingerprint,
+    invoke: Callable[[], CodexRunResult],
+) -> CodexRunResult | CycleResult:
+    """Run Codex then always compare fingerprints, even if Codex raises."""
+    caught: Exception | None = None
+    result: CodexRunResult | None = None
+    try:
+        result = invoke()
+    except Exception as exc:
+        caught = exc
+    post_fingerprint = fingerprint_state_file(state_file_path(root, spec.id, config=cfg))
+    if pre_fingerprint != post_fingerprint:
+        return _state_tampered_result(
+            spec, task, state, base_sha, current_state_relpath(spec.id, cfg)
+        )
+    if caught is not None:
+        raise caught
+    assert result is not None
+    return result
 
 
 def _preflight_current_state(

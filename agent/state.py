@@ -32,7 +32,7 @@ class StateFileFingerprint:
 
 
 def current_state_relpath(spec_id: str, config: AgentConfig) -> str:
-    directory = Path(config.state.directory).as_posix().strip("/")
+    directory = Path(config.state.directory).as_posix().rstrip("/")
     return f"{directory}/{spec_id}.json"
 
 
@@ -82,6 +82,20 @@ def fingerprint_state_file(path: Path | str) -> StateFileFingerprint:
         content_sha256=None,
         symlink_target=None,
     )
+
+
+def assert_current_state_regular_or_absent(path: Path | str) -> None:
+    """Fail closed if the current-state path exists and is not a regular file.
+
+    Uses lstat so a symlink to a valid Execution State JSON is rejected before
+    any follow-on read or replace.
+    """
+    fingerprint = fingerprint_state_file(path)
+    if fingerprint.exists and fingerprint.file_type != "regular":
+        raise AgentError.policy_violation(
+            f"current state is not a regular file: {path}",
+            code="STATE_TAMPERED",
+        )
 
 
 def _sha256_regular_file(path: Path) -> str:
@@ -356,6 +370,7 @@ def state_file_path(
 
 def read_state(path: Path | str) -> ExecutionState:
     state_path = Path(path)
+    assert_current_state_regular_or_absent(state_path)
     try:
         raw = state_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -375,6 +390,7 @@ def write_state(path: Path | str, state: ExecutionState) -> None:
     payload = state.to_json_dict()
     validate_execution_state_dict(payload)
     state_path = Path(path)
+    assert_current_state_regular_or_absent(state_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     tmp_path = state_path.with_name(state_path.name + ".tmp")
@@ -390,6 +406,7 @@ def init_state(
     overwrite: bool = False,
 ) -> ExecutionState:
     path = state_file_path(repo_root, spec.id, config=config)
+    assert_current_state_regular_or_absent(path)
     if path.exists() and not overwrite:
         raise AgentError.policy_violation(
             f"execution state already exists: {path}",
