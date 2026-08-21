@@ -27,7 +27,7 @@ from agent.gitutil import capture_snapshot, change_path_list, collect_changes
 from agent.gitwrite import export_patch, head_sha
 from agent.reconcile import ReconcileResult, load_state_or_new, prepare_execution_state
 from agent.scope import validate_spec_scope_policy
-from agent.spec import TaskSpec, parse_spec
+from agent.spec import TaskSpec, bind_spec_identity, parse_spec
 from agent.state import ExecutionState, current_state_relpath, new_execution_state
 
 
@@ -40,6 +40,7 @@ class WorkUnitReport:
     outcome: str
     spec_id: str
     spec_path: str
+    spec_sha256: str
     base_sha: str
     branch: str
     state: ExecutionState
@@ -62,6 +63,7 @@ class WorkUnitReport:
             "outcome": self.outcome,
             "spec_id": self.spec_id,
             "spec_path": self.spec_path,
+            "spec_sha256": self.spec_sha256,
             "base_sha": self.base_sha,
             "branch": self.branch,
             "state": self.state.to_json_dict(),
@@ -100,6 +102,7 @@ def load_work_unit_report(report_dir: Path | str) -> WorkUnitReport:
         outcome=str(payload["outcome"]),
         spec_id=str(payload["spec_id"]),
         spec_path=str(payload["spec_path"]),
+        spec_sha256=str(payload.get("spec_sha256") or ""),
         base_sha=str(payload["base_sha"]),
         branch=str(payload["branch"]),
         state=state_from_dict(payload["state"]),
@@ -133,6 +136,11 @@ def run_work_unit(
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
     validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
+    parsed = bind_spec_identity(
+        parsed,
+        repo_root=root,
+        spec_directory=cfg.task_spec.directory,
+    )
     emit(SPEC_DISCOVERED, "task spec discovered", task_id=parsed.id, state="PENDING")
     emit(SPEC_VALIDATED, "task spec is valid", task_id=parsed.id, state="PENDING")
     try:
@@ -144,6 +152,7 @@ def run_work_unit(
                 outcome="SCOPE_VIOLATION",
                 spec_id=parsed.id,
                 spec_path=parsed.source_path or "",
+                spec_sha256=parsed.spec_sha256,
                 base_sha=snapshot.base_sha,
                 branch=parsed.target_branch,
                 state=new_execution_state(parsed),
@@ -177,6 +186,7 @@ def run_work_unit(
             outcome="ESCALATED" if exc.code in escalate_codes else "FAILED",
             spec_id=parsed.id,
             spec_path=parsed.source_path or "",
+            spec_sha256=parsed.spec_sha256,
             base_sha=snapshot.base_sha,
             branch=parsed.target_branch,
             state=state,
@@ -259,6 +269,7 @@ def run_work_unit(
         outcome=last.outcome,
         spec_id=parsed.id,
         spec_path=parsed.source_path or "",
+        spec_sha256=parsed.spec_sha256,
         base_sha=base_sha,
         branch=parsed.target_branch,
         state=last.state,
@@ -303,6 +314,7 @@ def _report_from_reconcile(
         outcome=outcome,
         spec_id=spec.id,
         spec_path=spec.source_path or "",
+        spec_sha256=spec.spec_sha256,
         base_sha=base_sha,
         branch=spec.target_branch,
         state=reconciled.state,

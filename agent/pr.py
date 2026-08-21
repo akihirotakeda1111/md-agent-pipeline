@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from agent.spec import TaskSpec
+from agent.errors import AgentError
+from agent.spec import TaskSpec, work_unit_identity
 
 WORK_UNIT_MARKER_START = "<!-- md-agent-work-unit"
 WORK_UNIT_MARKER_END = "-->"
-_MARKER_FIELDS = ("spec_id", "base_branch", "target_branch")
+_CORE_MARKER_FIELDS = ("spec_id", "base_branch", "target_branch")
+_IDENTITY_MARKER_FIELDS = ("spec_path", "spec_sha256")
+_MARKER_FIELDS = _CORE_MARKER_FIELDS + _IDENTITY_MARKER_FIELDS
 
 
 def build_pr_title(spec: TaskSpec) -> str:
@@ -17,18 +20,27 @@ def build_pr_title(spec: TaskSpec) -> str:
 
 
 def build_work_unit_marker(spec: TaskSpec) -> str:
+    identity = work_unit_identity(spec)
     return "\n".join(
         [
             WORK_UNIT_MARKER_START,
-            f"spec_id: {spec.id}",
-            f"base_branch: {spec.base_branch}",
-            f"target_branch: {spec.target_branch}",
+            f"spec_id: {identity.spec_id}",
+            f"spec_path: {identity.spec_path}",
+            f"spec_sha256: {identity.spec_sha256}",
+            f"base_branch: {identity.base_branch}",
+            f"target_branch: {identity.target_branch}",
             WORK_UNIT_MARKER_END,
         ]
     )
 
 
 def parse_work_unit_marker(body: str | None) -> dict[str, str] | None:
+    """Parse a work-unit marker.
+
+    Core fields (spec_id / base_branch / target_branch) are required so old
+    markers remain candidate-selectable. spec_path / spec_sha256 are optional at
+    parse time; reuse authorization rejects them when missing.
+    """
     if not body:
         return None
     start = body.find(WORK_UNIT_MARKER_START)
@@ -50,7 +62,7 @@ def parse_work_unit_marker(body: str | None) -> dict[str, str] | None:
             if key in fields:
                 return None
             fields[key] = value
-    if any(key not in fields for key in _MARKER_FIELDS):
+    if any(key not in fields for key in _CORE_MARKER_FIELDS):
         return None
     return fields
 
@@ -66,7 +78,11 @@ def _pull_ref(pull: Mapping[str, Any], side: str) -> str | None:
 
 
 def is_same_work_unit_pull(spec: TaskSpec, pull: Mapping[str, Any]) -> bool:
-    """True only when GitHub refs and the PR marker identify this work unit."""
+    """True only when GitHub refs and the PR marker identify this work unit.
+
+    Candidate selection uses spec_id / base_branch / target_branch / refs.
+    spec_path and spec_sha256 are not selection criteria.
+    """
     marker = parse_work_unit_marker(str(pull.get("body") or ""))
     if marker is None:
         return False
@@ -79,6 +95,39 @@ def is_same_work_unit_pull(spec: TaskSpec, pull: Mapping[str, Any]) -> bool:
         and head == spec.target_branch
         and base == spec.base_branch
     )
+
+
+def authorize_work_unit_reuse(spec: TaskSpec, pull: Mapping[str, Any]) -> None:
+    """Fail-closed reuse authorization after same-work-unit candidate selection."""
+    marker = parse_work_unit_marker(str(pull.get("body") or ""))
+    if marker is None:
+        raise AgentError.escalation_required(
+            "open pull request on the target branch is not the same work unit",
+            code="WORK_UNIT_PR_MISMATCH",
+        )
+    assert_spec_matches_marker(spec, marker)
+
+
+def assert_spec_matches_marker(spec: TaskSpec, marker: Mapping[str, str]) -> None:
+    identity = work_unit_identity(spec)
+    marker_path = str(marker.get("spec_path") or "")
+    marker_sha = str(marker.get("spec_sha256") or "")
+    if not marker_path or not marker_sha:
+        raise AgentError.escalation_required(
+            "PR marker is missing spec_path/spec_sha256 required for reuse",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    if (
+        marker.get("spec_id") != identity.spec_id
+        or marker_path != identity.spec_path
+        or marker_sha != identity.spec_sha256
+        or marker.get("base_branch") != identity.base_branch
+        or marker.get("target_branch") != identity.target_branch
+    ):
+        raise AgentError.escalation_required(
+            "PR marker spec identity does not match the current work unit",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
 
 
 def build_pr_body(

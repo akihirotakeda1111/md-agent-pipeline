@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,16 @@ class TaskSpec:
     tasks: tuple[SpecTask, ...]
     final_verification: str
     source_path: str | None = None
+    spec_sha256: str = ""
+
+
+@dataclass(frozen=True)
+class WorkUnitIdentity:
+    spec_id: str
+    spec_path: str
+    spec_sha256: str
+    base_branch: str
+    target_branch: str
 
 
 @dataclass
@@ -104,9 +115,198 @@ def parse_spec(path: Path | str) -> TaskSpec:
 
 
 def parse_spec_text(text: str, *, source_path: str | None = None) -> TaskSpec:
+    digest = spec_source_sha256(text)
     instance = parse_spec_dict(text)
     validate_spec_dict(instance)
-    return spec_from_dict(instance, source_path=source_path)
+    return spec_from_dict(instance, source_path=source_path, spec_sha256=digest)
+
+
+def spec_source_sha256(text: str) -> str:
+    """SHA-256 of original Task Spec source text after newline normalization.
+
+    This is the sole Production digest for Work Unit identity. Callers must not
+    reimplement CRLF/CR → LF → UTF-8 → SHA-256 independently.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def canonicalize_spec_path(
+    path: str,
+    *,
+    repo_root: Path | str,
+    spec_directory: str,
+) -> str:
+    """Return a canonical repository-relative POSIX Task Spec path.
+
+    Absolute and Windows paths under ``repo_root`` are converted. ``.`` / ``..``
+    are collapsed, repository escape is rejected, and the result must stay under
+    the Task Spec directory.
+    """
+    raw = path.strip()
+    if not raw:
+        raise AgentError.escalation_required(
+            "spec_path is empty",
+            code="SPEC_PATH_INVALID",
+        )
+    relative = _repo_relative_spec_path(raw, repo_root=repo_root)
+    canonical = _collapse_path_segments(relative)
+    if not canonical:
+        raise AgentError.escalation_required(
+            "canonical spec_path is empty",
+            code="SPEC_PATH_INVALID",
+        )
+    _assert_under_spec_directory(canonical, spec_directory)
+    return canonical
+
+
+def is_canonical_spec_path(path: str, *, spec_directory: str) -> bool:
+    if not path or path != path.strip() or "\\" in path:
+        return False
+    if path.startswith("/") or _is_windows_drive_path(path) or _is_unc_path(path):
+        return False
+    parts = path.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return False
+    try:
+        _assert_under_spec_directory(path, spec_directory)
+    except AgentError:
+        return False
+    return True
+
+
+def bind_spec_identity(
+    spec: TaskSpec,
+    *,
+    repo_root: Path | str,
+    spec_directory: str,
+) -> TaskSpec:
+    """Fix canonical spec_path on a parsed spec. spec_sha256 comes from source text."""
+    if not spec.spec_sha256:
+        raise AgentError.escalation_required(
+            "spec_sha256 is missing",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    if not spec.source_path:
+        raise AgentError.escalation_required(
+            "spec_path is missing",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    canonical = canonicalize_spec_path(
+        spec.source_path,
+        repo_root=repo_root,
+        spec_directory=spec_directory,
+    )
+    if spec.source_path == canonical:
+        return spec
+    return replace(spec, source_path=canonical)
+
+
+def work_unit_identity(spec: TaskSpec) -> WorkUnitIdentity:
+    if not spec.source_path or not spec.spec_sha256:
+        raise AgentError.escalation_required(
+            "Task Spec identity is not bound",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    return WorkUnitIdentity(
+        spec_id=spec.id,
+        spec_path=spec.source_path,
+        spec_sha256=spec.spec_sha256,
+        base_branch=spec.base_branch,
+        target_branch=spec.target_branch,
+    )
+
+
+def _repo_relative_spec_path(path: str, *, repo_root: Path | str) -> str:
+    posix = path.replace("\\", "/")
+    root = Path(repo_root)
+    candidate = Path(path)
+    absolute = (
+        candidate.is_absolute() or _is_windows_drive_path(path) or _is_windows_drive_path(posix)
+    )
+    if absolute:
+        if candidate.exists() and root.exists():
+            try:
+                return candidate.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError as exc:
+                raise AgentError.escalation_required(
+                    f"spec path escapes repository: {path}",
+                    code="SPEC_PATH_ESCAPE",
+                ) from exc
+        stripped = _strip_repo_prefix(posix, _posix_root(root))
+        if stripped is None:
+            raise AgentError.escalation_required(
+                f"spec path escapes repository: {path}",
+                code="SPEC_PATH_ESCAPE",
+            )
+        return stripped
+    return posix
+
+
+def _posix_root(repo_root: Path) -> str:
+    try:
+        if repo_root.exists():
+            return repo_root.resolve().as_posix().rstrip("/")
+    except OSError:
+        pass
+    return str(repo_root).replace("\\", "/").rstrip("/")
+
+
+def _strip_repo_prefix(posix_path: str, root_posix: str) -> str | None:
+    path = posix_path.rstrip("/")
+    root = root_posix.rstrip("/")
+    if not root:
+        return None
+    if _is_windows_drive_path(path) or _is_windows_drive_path(root):
+        path_cmp, root_cmp = path.lower(), root.lower()
+    else:
+        path_cmp, root_cmp = path, root
+    if path_cmp == root_cmp:
+        return ""
+    prefix = root_cmp + "/"
+    if not path_cmp.startswith(prefix):
+        return None
+    return path[len(root) + 1 :]
+
+
+def _collapse_path_segments(relative: str) -> str:
+    parts: list[str] = []
+    for part in relative.replace("\\", "/").split("/"):
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if not parts:
+                raise AgentError.escalation_required(
+                    "spec path escapes repository",
+                    code="SPEC_PATH_ESCAPE",
+                )
+            parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _assert_under_spec_directory(canonical: str, spec_directory: str) -> None:
+    directory = spec_directory.replace("\\", "/").strip("/")
+    if not directory:
+        raise AgentError.escalation_required(
+            "task spec directory is empty",
+            code="SPEC_PATH_INVALID",
+        )
+    prefix = directory + "/"
+    if canonical == directory or not canonical.startswith(prefix):
+        raise AgentError.escalation_required(
+            f"spec path must be under {prefix}: {canonical}",
+            code="SPEC_PATH_OUT_OF_DIR",
+        )
+
+
+def _is_windows_drive_path(value: str) -> bool:
+    return len(value) >= 2 and value[0].isalpha() and value[1] == ":"
+
+
+def _is_unc_path(value: str) -> bool:
+    return value.startswith("\\\\") or value.startswith("//")
 
 
 def parse_spec_dict(text: str) -> dict[str, Any]:
@@ -163,7 +363,12 @@ def spec_to_dict(spec: TaskSpec) -> dict[str, Any]:
     return payload
 
 
-def spec_from_dict(instance: dict[str, Any], *, source_path: str | None = None) -> TaskSpec:
+def spec_from_dict(
+    instance: dict[str, Any],
+    *,
+    source_path: str | None = None,
+    spec_sha256: str = "",
+) -> TaskSpec:
     return TaskSpec(
         schema_version=int(instance["schema_version"]),
         id=instance["id"],
@@ -192,6 +397,7 @@ def spec_from_dict(instance: dict[str, Any], *, source_path: str | None = None) 
         ),
         final_verification=instance["final_verification"],
         source_path=source_path,
+        spec_sha256=spec_sha256,
     )
 
 

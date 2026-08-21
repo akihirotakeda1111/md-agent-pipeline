@@ -96,7 +96,7 @@ def artifact_factory(tmp_path: Path, git_repo: GitRepo):
         report_overrides: dict[str, object] | None = None,
         patch_bytes: bytes | None = None,
     ):
-        from agent.spec import parse_spec
+        from agent.spec import bind_spec_identity, parse_spec
         from agent.state import ExecutionState, ExecutionStatus
         from agent.workunit import WorkUnitReport
 
@@ -108,6 +108,7 @@ def artifact_factory(tmp_path: Path, git_repo: GitRepo):
         patch_path = artifacts_dir / "changes.patch"
         patch_path.write_bytes(actual_patch)
         spec = parse_spec(spec_path)
+        spec = bind_spec_identity(spec, repo_root=git_repo.root, spec_directory="specs/tasks")
         state = ExecutionState(
             schema_version=1,
             task_id=spec.id,
@@ -124,7 +125,8 @@ def artifact_factory(tmp_path: Path, git_repo: GitRepo):
         report = WorkUnitReport(
             outcome="FINAL_VERIFICATION_PASSED",
             spec_id=spec.id,
-            spec_path=str(spec_path),
+            spec_path=spec.source_path or "",
+            spec_sha256=spec.spec_sha256,
             base_sha=git_repo.head,
             branch=spec.target_branch,
             state=state,

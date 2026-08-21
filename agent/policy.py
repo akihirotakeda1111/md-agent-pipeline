@@ -63,6 +63,10 @@ ESCALATE_CODES = frozenset(
         "SPEC_NOT_FOUND",
         "DUPLICATE_SPEC_ID",
         "UNSAFE_REVIEW_TRACK",
+        "SPEC_IDENTITY_MISMATCH",
+        "SPEC_PATH_INVALID",
+        "SPEC_PATH_ESCAPE",
+        "SPEC_PATH_OUT_OF_DIR",
     }
 )
 
