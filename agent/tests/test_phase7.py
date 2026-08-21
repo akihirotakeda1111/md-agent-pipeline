@@ -429,7 +429,11 @@ def _run(
         github=fake.client(),
         classifier=classifier,
         executor=executor,
-        env={"CODEX_API_KEY": "codex-secret", "REVIEW_CLASSIFIER_API_KEY": "review-secret"},
+        env={
+            "CODEX_API_KEY": "codex-secret",
+            "REVIEW_CLASSIFIER_API_KEY": "review-secret",
+            "AGENT_PR_PAT": "pr-create-must-not-leak",
+        },
     )
 
 
@@ -1230,6 +1234,7 @@ def test_review_fix_isolates_credentials(tmp_path: Path) -> None:
         seen["CODEX_API_KEY"] = env.get("CODEX_API_KEY")
         seen["REVIEW_CLASSIFIER_API_KEY"] = env.get("REVIEW_CLASSIFIER_API_KEY")
         seen["GITHUB_TOKEN"] = env.get("GITHUB_TOKEN")
+        seen["AGENT_PR_PAT"] = env.get("AGENT_PR_PAT")
         assert "Fix the poller timeout." in stdin
         Path(cwd, "src", "app.py").write_text("fixed\n", encoding="utf-8")
         return ProcessResult(0, "", "")
@@ -1244,6 +1249,7 @@ def test_review_fix_isolates_credentials(tmp_path: Path) -> None:
     assert seen["CODEX_API_KEY"] == "codex-secret"
     assert seen["REVIEW_CLASSIFIER_API_KEY"] is None
     assert seen["GITHUB_TOKEN"] is None
+    assert seen["AGENT_PR_PAT"] is None
 
 
 def test_tracking_comment_is_github_durable_not_agent_state() -> None:

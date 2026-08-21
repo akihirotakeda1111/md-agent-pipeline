@@ -190,8 +190,9 @@ deliver job（`contents: write` / `pull-requests: write` / `issues: write`）は
 Phase 6 の実 GitHub 実行には人間側の設定が必要です。
 
 - **GitHub Secrets**: Repository Secret `CODEX_API_KEY`（execute の Orchestrator step のみ）
+- **GitHub Secrets**: Repository Secret `AGENT_PR_PAT`（fine-grained PAT。deliver の `create_pull()` のみ）。PAT 所有者が PR author になり、手動 `@coderabbitai` なしで CodeRabbit auto review が発火する。commit / push、既存 PR 検索・reconciliation、label、comment は `GITHUB_TOKEN`。Codex / Review Classifier / execute / review job には渡さない
+- **PAT 権限**: 対象 repository の Pull requests: Read and write。Contents: Read が必要な場合がある。Workflows write は付けない。PAT 所有者は CodeRabbit の auto review 対象（seat / 対象条件）を満たすこと
 - **Actions permissions**: workflow は default `contents: read`。deliver job だけ `contents: write` / `pull-requests: write` / `issues: write`
-- **Allow GitHub Actions to create and approve pull requests**: repository Settings → Actions → General → Workflow permissions で有効化しないと `GITHUB_TOKEN` は PR を作れません
 - **branch protection**: base branch の protection は維持してよい。feature branch への Orchestrator push を妨げないこと。force push は使わない
 - labels: `agent:review` / `agent:ready` / `agent:escalated` / `agent:failed` は exclusive。Deliver は PR 作成時に `agent:review` を付ける。review が current HEAD で収束したときだけ `agent:ready`。`agent:running` は execute に write を足さないため適用しない
 - **Codex authentication**: `CODEX_API_KEY` のみ。deliver / Git / Validation へは渡さない

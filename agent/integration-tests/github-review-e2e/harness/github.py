@@ -701,6 +701,7 @@ class GitHub:
             merged=bool(details.get("merged")),
             merged_at=details.get("merged_at"),
             auto_merge=details.get("auto_merge"),
+            author=str((details.get("user") or {}).get("login") or ""),
         )
 
     def list_feedback(self, number: int) -> list[FeedbackEvidence]:

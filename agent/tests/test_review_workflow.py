@@ -101,6 +101,7 @@ def test_review_job_checks_out_api_head_and_isolates_secrets() -> None:
     env = secret_steps[0]["env"]
     assert env["CODEX_API_KEY"] == "${{ secrets.CODEX_API_KEY }}"
     assert env["REVIEW_CLASSIFIER_API_KEY"] == "${{ secrets.REVIEW_CLASSIFIER_API_KEY }}"
+    assert "AGENT_PR_PAT" not in yaml.safe_dump(payload)
     run = secret_steps[0]["run"]
     assert "run-review.py" in run
     assert "${{ runner.temp }}/orchestrator" in run

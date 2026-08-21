@@ -1,7 +1,8 @@
 """Orchestrator Git write operations. Codex never calls this module.
 
 Forbidden: force push, history rewrite, commit --amend, rebase.
-Git subprocess env is sanitized and never receives CODEX_API_KEY or GITHUB_TOKEN.
+Git subprocess env is sanitized and never receives CODEX_API_KEY, GITHUB_TOKEN,
+or AGENT_PR_PAT.
 Checkout uses persist-credentials: false. Push injects HTTPS auth via a
 process-local GIT_CONFIG extraHeader so Final Verification cannot reuse it.
 """
@@ -278,7 +279,10 @@ def commit_paths(
 
 
 def _push_auth_env() -> dict[str, str]:
-    """HTTPS auth for the git push subprocess only. Not written to .git/config."""
+    """HTTPS auth for the git push subprocess only. Not written to .git/config.
+
+    Uses GITHUB_TOKEN, never AGENT_PR_PAT. The PAT is reserved for create_pull.
+    """
     token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
     if not token:
         return {}

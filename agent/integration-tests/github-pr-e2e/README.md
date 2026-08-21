@@ -159,12 +159,12 @@ Harnessを実行する`gh` credentialには、対象repositoryについて次が
 - Pull Request read/close
 - feature branch cleanup
 
-Production workflowは既存`GITHUB_TOKEN` permissionsと既存`CODEX_API_KEY` secretを使用します。Harnessは`CODEX_API_KEY`を読み取り・受け渡し・保存しません。
+Production workflowは既存`GITHUB_TOKEN` permissions、既存`CODEX_API_KEY` secret、および PR 作成専用の `AGENT_PR_PAT` secretを使用します。Harnessはこれらのsecretを読み取り・受け渡し・保存しません。
 
 repository側では既存Phase 5/6 Manual Setupが完了している必要があります。
 
 - Production secret `CODEX_API_KEY`
-- GitHub ActionsからのPull Request作成許可
+- Production secret `AGENT_PR_PAT`（deliver の `create_pull()` のみ。PR author は PAT 所有者）
 - Production execute/deliver job permissions
 - Production workflowがactive
 

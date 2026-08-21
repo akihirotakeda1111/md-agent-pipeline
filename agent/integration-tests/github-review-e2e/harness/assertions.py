@@ -62,6 +62,10 @@ def assert_pr(pr: PullRequestEvidence, scenario: Scenario) -> None:
     assert re.search(r"agent[-_ ]?work[-_ ]?unit", pr.body, re.IGNORECASE)
     assert scenario.task_id in pr.body
     assert "agent:review" in pr.labels
+    assert pr.author, "PR author is missing"
+    assert pr.author not in {"github-actions[bot]", "github-actions-bot"}, (
+        f"PR author {pr.author!r} is the Actions bot; create_pull must use AGENT_PR_PAT"
+    )
 
 
 def assert_pr_scope(files: list[str], scenario: Scenario) -> None:

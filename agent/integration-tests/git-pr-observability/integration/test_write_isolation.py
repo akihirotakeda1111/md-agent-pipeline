@@ -22,6 +22,8 @@ def test_36_40_execute_validation_git_and_deliver_credentials_are_isolated(
     assert deliver.get("pull-requests") == "write"
     assert deliver.get("issues") == "write"
     assert not contains_reference(workflow["jobs"]["deliver"], "CODEX_API_KEY")
+    assert contains_reference(workflow["jobs"]["deliver"], "AGENT_PR_PAT")
+    assert not contains_reference(workflow["jobs"]["execute"], "AGENT_PR_PAT")
 
     execute_services = service_factory(
         codex_steps=[CodexStep({"app/task-1.txt": "one\n"}), CodexStep({"app/task-2.txt": "two\n"})]
@@ -52,6 +54,7 @@ def test_adapter_restores_process_env_between_execute_and_deliver(
     )
     assert os.environ.get("CODEX_API_KEY") == before.get("CODEX_API_KEY")
     assert os.environ.get("GITHUB_TOKEN") == before.get("GITHUB_TOKEN")
+    assert os.environ.get("AGENT_PR_PAT") == before.get("AGENT_PR_PAT")
 
     deliver_services = service_factory(github_responses=NEW_PR_GITHUB)
     phase6_driver.deliver(
@@ -60,6 +63,7 @@ def test_adapter_restores_process_env_between_execute_and_deliver(
     )
     assert os.environ.get("CODEX_API_KEY") == before.get("CODEX_API_KEY")
     assert os.environ.get("GITHUB_TOKEN") == before.get("GITHUB_TOKEN")
+    assert os.environ.get("AGENT_PR_PAT") == before.get("AGENT_PR_PAT")
 
 
 def test_phase6_deliver_applies_review_waiting_label(

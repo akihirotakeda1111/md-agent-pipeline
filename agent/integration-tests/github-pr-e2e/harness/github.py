@@ -198,6 +198,7 @@ class GitHub:
             head_sha=str(details["head"]["sha"]),
             body=str(details.get("body") or ""),
             labels=tuple(str(label["name"]) for label in details.get("labels", [])),
+            author=str((details.get("user") or {}).get("login") or ""),
         )
 
     def branch_sha(self, branch: str) -> str:

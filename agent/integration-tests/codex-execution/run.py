@@ -447,7 +447,7 @@ def run_case(
             "prompt contains a task other than Current Task",
         )
         add_error(errors, "CODEX_API_KEY" in env_keys, "allowlisted synthetic key was missing")
-        for denied in ("OPENAI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"):
+        for denied in ("OPENAI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AGENT_PR_PAT"):
             add_error(
                 errors,
                 denied not in env_keys,
@@ -570,6 +570,7 @@ def main() -> int:
             environment["OPENAI_API_KEY"] = "fixture-openai-key-must-be-excluded"
             environment["GITHUB_TOKEN"] = "fixture-github-token-must-be-excluded"
             environment["GH_TOKEN"] = "fixture-gh-token-must-be-excluded"
+            environment["AGENT_PR_PAT"] = "fixture-pr-pat-must-be-excluded"
 
         all_rows: list[CommandResult] = []
         summary: list[dict[str, Any]] = []

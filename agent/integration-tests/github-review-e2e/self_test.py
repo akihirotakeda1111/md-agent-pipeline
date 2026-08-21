@@ -270,6 +270,7 @@ class HarnessTests(unittest.TestCase):
             False,
             None,
             None,
+            "pat-owner",
         )
         assert_pr(pr, self.scenario)
         assert_pr_scope([self.scenario.generated_file], self.scenario)

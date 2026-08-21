@@ -74,11 +74,16 @@ Deliver Job
   contents: write
   pull-requests: write
   issues: write
+  GITHUB_TOKEN（commit / push / reconciliation / labels / comments）
+  AGENT_PR_PAT（create_pull のみ）
   Codex API credentialなし
 ```
 
 Codex API credentialとGitHub write credentialを
 同一processへ同時に露出しない。
+
+`AGENT_PR_PAT` は `create_pull()` 以外へ渡さない。
+Codex / Review Classifier / git subprocess にも渡さない。
 
 CodexはGit writeを行わず、
 Commit / Push / Pull Request作成はDeliver側Orchestratorのみが行う。
@@ -171,6 +176,10 @@ commit対象はreport上のchanged filesではなく、
 ## Pull Request
 
 全Task + Final Verification + Deliver Verification成功後のみ作成する。
+
+PR 作成 API（`create_pull`）だけ Actions Secret `AGENT_PR_PAT` を使う。
+author を PAT 所有者にし、CodeRabbit auto review を発火させる。
+既存 PR の検索・再利用・競合時 reconciliation、label、comment は `GITHUB_TOKEN` のまま。
 
 PR本文に最低限:
 

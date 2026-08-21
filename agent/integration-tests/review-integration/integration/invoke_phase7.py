@@ -46,6 +46,7 @@ _JOB_CREDENTIALS = (
     "GITHUB_TOKEN",
     "GH_TOKEN",
     "GITHUB_PAT",
+    "AGENT_PR_PAT",
 )
 
 _KIND_MAP = {

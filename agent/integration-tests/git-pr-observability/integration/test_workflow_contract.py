@@ -47,6 +47,7 @@ def test_codex_steps_have_no_github_write_credential_or_authority(production_roo
         # Production isolates Codex by setting GITHUB_TOKEN to empty, not by omitting the key.
         assert not env.get("GITHUB_TOKEN"), "Codex step has a usable GITHUB_TOKEN"
         assert not env.get("GH_TOKEN"), "Codex step has a usable GH_TOKEN"
+        assert not env.get("AGENT_PR_PAT"), "Codex step has a usable AGENT_PR_PAT"
         with_inputs = step.get("with") or {}
         assert not with_inputs.get("github-token"), "Codex step has a usable github-token"
 
@@ -72,3 +73,6 @@ def test_checkout_does_not_persist_credentials_and_fetches_full_history(producti
 def test_deliver_job_has_no_codex_credential(production_root):
     workflow = load_workflow(production_root / ".github" / "workflows" / "agent-execute.yml")
     assert not contains_reference(workflow["jobs"]["deliver"], "CODEX_API_KEY")
+    assert contains_reference(workflow["jobs"]["deliver"], "AGENT_PR_PAT")
+    assert not contains_reference(workflow["jobs"]["execute"], "AGENT_PR_PAT")
+    assert not contains_reference(workflow["jobs"]["parse-spec"], "AGENT_PR_PAT")

@@ -34,6 +34,7 @@ API_VERSION = "2026-03-10"
 ACCEPT = "application/vnd.github+json"
 USER_AGENT = "md-agent-orchestrator"
 DEFAULT_TIMEOUT_SECONDS = 30
+PULL_CREATE_TOKEN_ENV = "AGENT_PR_PAT"
 
 Requester = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
 
@@ -55,6 +56,7 @@ class GitHubClient:
         api_url: str = "https://api.github.com",
         requester: Requester | None = None,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        pull_create_token: str = "",
     ) -> None:
         if not token.strip():
             raise AgentError.environment_failure(
@@ -64,6 +66,7 @@ class GitHubClient:
         if "/" not in repository or repository.count("/") != 1:
             raise AgentError.invalid_input(f"invalid GITHUB_REPOSITORY: {repository!r}")
         self.token = token
+        self.pull_create_token = pull_create_token
         self.owner, self.repo = repository.split("/", 1)
         self.api_url = api_url.rstrip("/")
         self._requester = requester or _default_requester
@@ -76,14 +79,16 @@ class GitHubClient:
         *,
         query: Mapping[str, str] | None = None,
         body: Mapping[str, Any] | None = None,
+        authorization_token: str | None = None,
     ) -> GitHubResponse:
         url = self.api_url + path
         if query:
             url += "?" + urlencode(query)
         encoded = None if body is None else json.dumps(body).encode("utf-8")
+        bearer = self.token if authorization_token is None else authorization_token
         headers = {
             "Accept": ACCEPT,
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"Bearer {bearer}",
             "X-GitHub-Api-Version": API_VERSION,
             "User-Agent": USER_AGENT,
         }
@@ -130,10 +135,17 @@ class GitHubClient:
         return [item for item in response.payload if isinstance(item, dict)]
 
     def create_pull(self, *, title: str, head: str, base: str, body: str) -> dict[str, Any]:
+        token = self.pull_create_token.strip()
+        if not token:
+            raise AgentError.environment_failure(
+                "AGENT_PR_PAT is required to create pull requests",
+                code="MISSING_AGENT_PR_PAT",
+            )
         response = self.request(
             "POST",
             f"/repos/{self.owner}/{self.repo}/pulls",
             body={"title": title, "head": head, "base": base, "body": body},
+            authorization_token=token,
         )
         if not isinstance(response.payload, dict):
             raise AgentError.environment_failure(
@@ -380,6 +392,7 @@ def github_client_from_env(
 ) -> GitHubClient:
     source = os.environ if env is None else env
     token = (source.get("GITHUB_TOKEN") or source.get("GH_TOKEN") or "").strip()
+    pull_create_token = (source.get(PULL_CREATE_TOKEN_ENV) or "").strip()
     repository = (source.get("GITHUB_REPOSITORY") or "").strip()
     api_url = (source.get("GITHUB_API_URL") or "https://api.github.com").strip()
     if not repository:
@@ -389,6 +402,7 @@ def github_client_from_env(
         )
     return GitHubClient(
         token=token,
+        pull_create_token=pull_create_token,
         repository=repository,
         api_url=api_url,
         requester=requester,

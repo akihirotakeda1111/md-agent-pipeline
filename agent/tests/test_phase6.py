@@ -832,12 +832,12 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
     (repo / "src" / "app.py").unlink()
 
     created_labels: set[str] = set()
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
 
     def requester(
         method: str, url: str, headers: dict[str, str], data: bytes | None
     ) -> tuple[int, object]:
-        calls.append((method, url))
+        calls.append((method, url, headers["Authorization"]))
         if method == "GET" and "/labels/" in url:
             name = unquote(url.rsplit("/", 1)[-1])
             if name in created_labels:
@@ -867,14 +867,24 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
         spec,
         repo_root=repo,
         report_dir=report_dir,
-        github=GitHubClient(token="tok", repository="octo/repo", requester=requester),
+        github=GitHubClient(
+            token="tok",
+            pull_create_token="pr-pat",
+            repository="octo/repo",
+            requester=requester,
+        ),
         summary_path=tmp_path / "summary.md",
     )
     assert result.outcome == "PR_CREATED"
     assert result.pr_number == 12
     assert result.code != "GITHUB_API_NETWORK"
     assert created_labels == set(PHASE7_APPLIED_LABELS)
-    assert any(method == "POST" and url.endswith("/pulls") for method, url in calls)
+    assert any(method == "POST" and url.endswith("/pulls") for method, url, _auth in calls)
+    for method, url, auth in calls:
+        if method == "POST" and url.endswith("/pulls"):
+            assert auth == "Bearer pr-pat"
+        else:
+            assert auth == "Bearer tok"
     assert "feature/deliver" in _git(origin, "branch")
 
 

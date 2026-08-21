@@ -130,6 +130,7 @@ def test_classifier_and_codex_credentials_are_separated(production_root):
     orchestrator_env = orchestrator[0].get("env", {})
     assert contains_reference(orchestrator_env, "CODEX_API_KEY")
     assert contains_reference(orchestrator_env, "REVIEW_CLASSIFIER_API_KEY")
+    assert not contains_reference(workflow, "AGENT_PR_PAT")
     for step in steps:
         if step in orchestrator:
             continue
@@ -158,4 +159,5 @@ def test_codex_action_allows_only_configured_coderabbit_bot(production_root):
     assert inputs.get("prompt") in (None, "")
     assert inputs.get("prompt-file") in (None, "")
     assert "GITHUB_TOKEN" not in str(inputs)
+    assert "AGENT_PR_PAT" not in str(inputs)
     assert "REVIEW_CLASSIFIER_API_KEY" not in str(bootstrap)

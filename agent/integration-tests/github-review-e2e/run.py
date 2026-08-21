@@ -431,6 +431,7 @@ def main() -> int:
                 },
                 "manual_preconditions_not_secret-read": [
                     "CODEX_API_KEY",
+                    "AGENT_PR_PAT",
                     "REVIEW_CLASSIFIER_API_KEY",
                     "CodeRabbit App authorization and auto/incremental review",
                     "automatic merge disabled",

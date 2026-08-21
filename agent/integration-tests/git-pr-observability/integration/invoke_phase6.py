@@ -44,6 +44,7 @@ _JOB_CREDENTIALS = (
     "GITHUB_TOKEN",
     "GH_TOKEN",
     "GITHUB_PAT",
+    "AGENT_PR_PAT",
 )
 
 
@@ -158,6 +159,7 @@ def _execute_job_env(environment: dict[str, str]) -> dict[str, str]:
     env["GITHUB_TOKEN"] = ""
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_PAT", None)
+    env.pop("AGENT_PR_PAT", None)
     return env
 
 

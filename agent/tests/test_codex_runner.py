@@ -93,6 +93,7 @@ def test_env_allowlist_excludes_github_and_openai_keys() -> None:
             "OPENAI_API_KEY": "openai-secret",
             "GITHUB_TOKEN": "gh-write-token",
             "GH_TOKEN": "gh-alt",
+            "AGENT_PR_PAT": "pr-create-token",
             "AWS_SECRET_ACCESS_KEY": "aws-secret",
             "DATABASE_URL": "postgres://x",
             "REVIEW_CLASSIFIER_API_KEY": "review-secret",
@@ -103,6 +104,7 @@ def test_env_allowlist_excludes_github_and_openai_keys() -> None:
     assert "OPENAI_API_KEY" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GH_TOKEN" not in env
+    assert "AGENT_PR_PAT" not in env
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert "DATABASE_URL" not in env
     assert "REVIEW_CLASSIFIER_API_KEY" not in env
@@ -156,7 +158,7 @@ def test_mock_codex_success(tmp_path: Path) -> None:
         spec,
         task,
         repo_root=REPO_ROOT,
-        env={"PATH": "/bin", "CODEX_API_KEY": "codex-secret", "GITHUB_TOKEN": "nope"},
+        env={"PATH": "/bin", "CODEX_API_KEY": "codex-secret", "GITHUB_TOKEN": "nope", "AGENT_PR_PAT": "pr-pat"},
         executor=executor,
     )
 
@@ -170,6 +172,7 @@ def test_mock_codex_success(tmp_path: Path) -> None:
     assert captured["cwd"] == str(REPO_ROOT)
     assert captured["command"][1] == "exec"
     assert "GITHUB_TOKEN" not in captured["env"]
+    assert "AGENT_PR_PAT" not in captured["env"]
     assert captured["env"]["CODEX_API_KEY"] == "codex-secret"
     assert "implementation engine" in str(captured["stdin"])
 

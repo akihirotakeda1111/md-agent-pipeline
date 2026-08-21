@@ -79,6 +79,7 @@ DENIED_ENV_ALWAYS = frozenset(
         "GITHUB_TOKEN",
         "GH_TOKEN",
         "GITHUB_PAT",
+        "AGENT_PR_PAT",
         "OPENAI_API_KEY",
     }
 )
@@ -97,7 +98,7 @@ _ERROR_EVENT_TYPES = frozenset(
     }
 )
 _SECRET_ASSIGN = re.compile(
-    r"(?P<prefix>\b(?:CODEX_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN|GITHUB_PAT)"
+    r"(?P<prefix>\b(?:CODEX_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN|GITHUB_PAT|AGENT_PR_PAT)"
     r"[ \t]*[=:][ \t]*)(?P<value>[^\s\"']+)",
     re.IGNORECASE,
 )

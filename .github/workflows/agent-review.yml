@@ -19,7 +19,7 @@
 # - Fork pull requests are skipped (API re-check in prepare).
 # - persist-credentials: false on every checkout.
 # - Classifier and Codex secrets are injected only on the orchestrator step.
-# - Codex never receives REVIEW_CLASSIFIER_API_KEY or GITHUB_TOKEN.
+# - Codex never receives REVIEW_CLASSIFIER_API_KEY, GITHUB_TOKEN, or AGENT_PR_PAT.
 # - Merge is never performed.
 # - Repair never runs against the default branch or a pull_request merge SHA.
 #
@@ -49,7 +49,7 @@
 #   checks: read (GET /commits/{sha}/check-runs), statuses: read
 #   (GET /commits/{sha}/statuses). contents write does not cover either.
 #   checks: write and statuses: write are forbidden.
-# - Codex subprocess never receives GITHUB_TOKEN.
+# - Codex subprocess never receives GITHUB_TOKEN or AGENT_PR_PAT.
 #
 # Official references:
 # - https://github.com/openai/codex-action

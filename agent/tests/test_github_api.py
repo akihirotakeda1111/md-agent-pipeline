@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 import pytest
 from agent.errors import AgentError, ErrorCategory
-from agent.github_api import GitHubClient, Requester
+from agent.github_api import GitHubClient, PULL_CREATE_TOKEN_ENV, Requester, github_client_from_env
 from agent.labels import PHASE6_APPLIED_LABELS, ensure_agent_labels
 
 
@@ -196,3 +196,60 @@ def test_list_commit_statuses_and_pulls_for_commit() -> None:
     assert client.list_pulls_for_commit("abc123")[0]["number"] == 7
     assert any("/commits/abc123/statuses" in url for url in urls)
     assert any("/commits/abc123/pulls" in url for url in urls)
+
+
+def test_create_pull_uses_agent_pr_pat_not_github_token() -> None:
+    auths: list[tuple[str, str, str]] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        auths.append((method, url, headers["Authorization"]))
+        if method == "GET":
+            return 200, []
+        return 201, {"number": 3, "html_url": "https://example.test/pull/3"}
+
+    client = GitHubClient(
+        token="github-token",
+        pull_create_token="pr-pat",
+        repository="octo/repo",
+        requester=requester,
+    )
+    created = client.create_pull(title="t", head="feature", base="main", body="body")
+    listed = client.list_open_pulls(head_branch="feature")
+    assert created["number"] == 3
+    assert listed == []
+    assert auths[0] == ("POST", "https://api.github.com/repos/octo/repo/pulls", "Bearer pr-pat")
+    assert auths[1][0] == "GET"
+    assert auths[1][2] == "Bearer github-token"
+
+
+def test_create_pull_fails_closed_without_agent_pr_pat() -> None:
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        raise AssertionError("must not call GitHub without AGENT_PR_PAT")
+
+    client = GitHubClient(token="github-token", repository="octo/repo", requester=requester)
+    with pytest.raises(AgentError) as caught:
+        client.create_pull(title="t", head="feature", base="main", body="body")
+    assert caught.value.code == "MISSING_AGENT_PR_PAT"
+
+
+def test_github_client_from_env_reads_agent_pr_pat(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def requester(
+        method: str, url: str, headers: dict[str, str], data: bytes | None
+    ) -> tuple[int, object]:
+        seen.append(headers["Authorization"])
+        return 201, {"number": 8, "html_url": "https://example.test/pull/8"}
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token")
+    monkeypatch.setenv(PULL_CREATE_TOKEN_ENV, "env-pr-pat")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+    client = github_client_from_env(requester=requester)
+    client.create_pull(title="t", head="feature", base="main", body="body")
+    assert seen == ["Bearer env-pr-pat"]
+    assert client.token == "github-token"
+

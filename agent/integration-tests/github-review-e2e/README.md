@@ -157,10 +157,12 @@ processed判定、attempt計算、READY判定はHarnessにありません。`.ag
 - Production `agent/config.json`の`coderabbit.actor`が実eventで観測したactorに設定済み。
   Harnessは値をhard-codeせず、cloneしたconfigを読み、実feedback actorと照合します。
 - Repository Secret `CODEX_API_KEY`。
+- Repository Secret `AGENT_PR_PAT`（deliver の PR 作成のみ。PR author が PAT 所有者であること）。
 - Repository Secret `REVIEW_CLASSIFIER_API_KEY`。
 - classifier model configが利用可能なpinned modelを参照。
 - Production `agent-execute.yml`と`agent-review.yml`がactive。
 - GitHub ActionsによるPR作成とnormal feature-branch pushが許可済み。
+  PR 作成は `AGENT_PR_PAT`。`GITHUB_TOKEN` で作った PR は CodeRabbit auto review が発火しない。
 - branch protectionがE2E feature branchへのnormal pushを妨げない。
 - automatic merge disabled。PR単位の`auto_merge`もnullであることを実行中にassertします。
 - Harnessの`gh` credentialにsource/feature branch read/write/delete、Actions read/dispatch、

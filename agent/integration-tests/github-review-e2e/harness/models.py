@@ -78,6 +78,7 @@ class PullRequestEvidence:
     merged: bool
     merged_at: str | None
     auto_merge: Any
+    author: str = ""
 
 
 @dataclass(frozen=True)
