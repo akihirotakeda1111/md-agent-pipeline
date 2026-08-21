@@ -500,6 +500,7 @@ def test_non_coderabbit_actor_is_rejected() -> None:
     reason = prefilter_reason(
         item,
         spec=_dummy_spec(),
+        runtime_policy=load_config().runtime_edit_policy,
         actor=load_config().coderabbit.actor,
         head_sha="abc",
         processed=set(),
@@ -1045,6 +1046,7 @@ def test_allowed_path_review_reaches_classifier(tmp_path: Path) -> None:
         prefilter_reason(
             item,
             spec=spec,
+            runtime_policy=load_config().runtime_edit_policy,
             actor=ACTOR,
             head_sha=head_sha(repo),
             processed=set(),
@@ -1094,6 +1096,7 @@ def test_mvp_policy_for_each_classification(
     decision = decide_review_policy(
         _result(label, confidence=confidence, paths=paths),
         spec,
+        runtime_policy=load_config().runtime_edit_policy,
         confidence_threshold=0.80,
         auto_repair_enabled=False,
     )
@@ -1126,6 +1129,7 @@ def test_policy_for_each_classification_when_auto_repair_enabled(
     decision = decide_review_policy(
         _result(label, confidence=confidence, paths=paths),
         spec,
+        runtime_policy=load_config().runtime_edit_policy,
         confidence_threshold=0.80,
         auto_repair_enabled=True,
     )
@@ -1138,6 +1142,7 @@ def test_actionable_empty_paths_escalates(tmp_path: Path) -> None:
     decision = decide_review_policy(
         _result(ReviewClassification.ACTIONABLE, paths=()),
         spec,
+        runtime_policy=load_config().runtime_edit_policy,
         confidence_threshold=0.80,
         auto_repair_enabled=True,
     )
@@ -1580,3 +1585,109 @@ def test_classifier_http_429_and_5xx_are_fail_closed() -> None:
     assert classifier_error_for_http(429).code == "CLASSIFIER_API_RATE_LIMIT"
     assert classifier_error_for_http(503).code == "CLASSIFIER_API_FAILURE"
     assert classifier_error_for_http(408).code == "CLASSIFIER_API_FAILURE"
+
+
+def test_protected_path_review_escalates_without_codex(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    (repo / "agent").mkdir()
+    (repo / "agent" / "config.json").write_text("{}\n", encoding="utf-8")
+    called = {"n": 0}
+
+    def classifier(item, spec):
+        called["n"] += 1
+        return _result(ReviewClassification.ACTIONABLE)
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        raise AssertionError("codex must not run")
+
+    fake.add_review_comment(path="agent/config.json", commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+    result = _run(repo, fake, classifier=classifier, executor=executor)
+    assert result.outcome == "ESCALATED"
+    assert called["n"] == 0
+
+
+def test_protected_referenced_paths_escalate_without_codex(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    called = {"n": 0}
+
+    def classifier(item, spec):
+        return _result(ReviewClassification.ACTIONABLE, paths=("agent/config.json",))
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        called["n"] += 1
+        raise AssertionError("codex must not run")
+
+    fake.add_review_comment(path="src/app.py", commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+    result = _run(
+        repo,
+        fake,
+        classifier=classifier,
+        executor=executor,
+        auto_repair_enabled=True,
+    )
+    assert result.outcome == "ESCALATED"
+    assert called["n"] == 0
+
+
+def test_review_repair_rejects_protected_path_change(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        dest = Path(cwd) / "specs" / "tasks" / "leaked.md"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("nope\n", encoding="utf-8")
+        return ProcessResult(0, "", "")
+
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+    result = _run(
+        repo,
+        fake,
+        classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
+        executor=executor,
+        auto_repair_enabled=True,
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.code == "REVIEW_SCOPE_VIOLATION"
+
+
+def test_review_repair_does_not_reload_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+
+    def boom(*_args: object, **_kwargs: object):
+        raise AssertionError("config must not be reloaded from PR HEAD")
+
+    monkeypatch.setattr("agent.review_loop.load_config", boom)
+    monkeypatch.setattr("agent.codex_runner.load_config", boom)
+    monkeypatch.setattr("agent.cycle.load_config", boom)
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        Path(cwd, "src", "app.py").write_text("fixed\n", encoding="utf-8")
+        rewritten = Path(cwd) / "agent" / "config.json"
+        rewritten.parent.mkdir(parents=True, exist_ok=True)
+        rewritten.write_text("{}", encoding="utf-8")
+        return ProcessResult(0, "", "")
+
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+    result = _run(
+        repo,
+        fake,
+        classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
+        executor=executor,
+        auto_repair_enabled=True,
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.code == "REVIEW_SCOPE_VIOLATION"

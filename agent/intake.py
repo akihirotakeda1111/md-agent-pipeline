@@ -12,6 +12,7 @@ from pathlib import Path
 from agent.config import AgentConfig, load_config
 from agent.errors import AgentError, ErrorCategory
 from agent.gitutil import normalize_git_path, require_git_ok, run_git
+from agent.scope import validate_spec_scope_policy
 from agent.spec import TaskSpec, parse_spec
 from agent.state import ExecutionStatus, read_state, state_file_path
 
@@ -162,6 +163,7 @@ def prepare_execute(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(_spec_file(repo_root, spec))
+    validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     assert_required_history(root, base_branch=parsed.base_branch)
     assert_execution_guard(parsed, root, config=cfg)
     return parsed

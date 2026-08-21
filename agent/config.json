@@ -41,5 +41,13 @@
     "actor": "coderabbitai[bot]",
     "check_app_slug": "coderabbitai",
     "status_context": "CodeRabbit"
+  },
+  "runtime_edit_policy": {
+    "protected_paths": [
+      "specs/**",
+      ".agent/**",
+      "agent/**",
+      ".github/**"
+    ]
   }
 }

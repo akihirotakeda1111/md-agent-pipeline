@@ -25,6 +25,7 @@ from agent.events import (
 from agent.gitutil import capture_snapshot, change_path_list, collect_changes
 from agent.gitwrite import export_patch, head_sha
 from agent.reconcile import ReconcileResult, load_state_or_new, prepare_execution_state
+from agent.scope import validate_spec_scope_policy
 from agent.spec import TaskSpec, parse_spec
 from agent.state import ExecutionState, new_execution_state
 
@@ -130,6 +131,7 @@ def run_work_unit(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
+    validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     emit(SPEC_DISCOVERED, "task spec discovered", task_id=parsed.id, state="PENDING")
     emit(SPEC_VALIDATED, "task spec is valid", task_id=parsed.id, state="PENDING")
     try:

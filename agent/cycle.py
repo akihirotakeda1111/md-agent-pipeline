@@ -43,13 +43,16 @@ from agent.gitutil import (
     working_tree_diff_text,
 )
 from agent.repair import build_repair_prompt, can_attempt_repair
-from agent.scope import ScopeCheckResult, check_scope
+from agent.scope import ScopeCheckResult, check_scope, validate_spec_scope_policy
 from agent.select import select_next_task
 from agent.spec import SpecTask, TaskSpec, parse_spec
 from agent.state import (
     ExecutionState,
     ExecutionStatus,
+    StateFileFingerprint,
     apply_transition,
+    current_state_relpath,
+    fingerprint_state_file,
     init_state,
     new_execution_state,
     read_state,
@@ -135,6 +138,7 @@ def run_task_cycle(
     cfg = config or load_config()
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
+    validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
     rest_env, api_key = detach_codex_api_key(env, api_key_env=cfg.codex.api_key_env)
     snapshot = capture_snapshot(root)
     if state is not None:
@@ -169,6 +173,15 @@ def run_task_cycle(
         state=current.state.value,
         extra={"spec_task": selected.id},
     )
+    pre_fingerprint = _preflight_current_state(root, parsed, cfg)
+    if pre_fingerprint is None:
+        return _state_tampered_result(
+            parsed,
+            selected,
+            current,
+            snapshot.base_sha,
+            current_state_relpath(parsed.id, cfg),
+        )
     implement = run_codex(
         parsed,
         selected,
@@ -198,6 +211,7 @@ def run_task_cycle(
         snapshot.base_sha,
         implement,
         persist_state,
+        pre_fingerprint,
         stage="implementation",
         attempt=0,
     )
@@ -305,6 +319,7 @@ def _after_codex(
     base_sha: str,
     implement: CodexRunResult,
     persist_state: bool,
+    pre_fingerprint: StateFileFingerprint,
     *,
     stage: str,
     attempt: int,
@@ -316,10 +331,13 @@ def _after_codex(
         state=state.state.value,
         extra={"spec_task": task.id},
     )
+    state_rel = current_state_relpath(spec.id, cfg)
+    post_fingerprint = fingerprint_state_file(state_file_path(root, spec.id, config=cfg))
+    if pre_fingerprint != post_fingerprint:
+        return _state_tampered_result(spec, task, state, base_sha, state_rel)
     changes = collect_changes(root, base_sha)
-    state_rel = Path(cfg.state.directory).as_posix() + f"/{spec.id}.json"
     changes = tuple(change for change in changes if state_rel not in change.paths)
-    scope = check_scope(spec, changes)
+    scope = check_scope(spec, changes, cfg.runtime_edit_policy)
     if not scope.allowed:
         emit(
             SCOPE_VIOLATION,
@@ -599,6 +617,7 @@ def _validate_and_maybe_repair(
         repo_root=root,
         failed=failed,
         diff_text=working_tree_diff_text(root, base_sha),
+        runtime_policy=cfg.runtime_edit_policy,
     )
     emit(
         CODEX_STARTED,
@@ -607,6 +626,15 @@ def _validate_and_maybe_repair(
         state=state.state.value,
         extra={"spec_task": task.id, "attempt": state.repair_attempts},
     )
+    pre_fingerprint = _preflight_current_state(root, spec, cfg)
+    if pre_fingerprint is None:
+        return _state_tampered_result(
+            spec,
+            task,
+            state,
+            base_sha,
+            current_state_relpath(spec.id, cfg),
+        )
     repair_run = run_codex(
         spec,
         task,
@@ -637,6 +665,58 @@ def _validate_and_maybe_repair(
         base_sha,
         repair_run,
         persist_state,
+        pre_fingerprint,
         stage="repair",
         attempt=state.repair_attempts,
+    )
+
+
+def _preflight_current_state(
+    root: Path, spec: TaskSpec, cfg: AgentConfig
+) -> StateFileFingerprint | None:
+    fingerprint = fingerprint_state_file(state_file_path(root, spec.id, config=cfg))
+    if fingerprint.exists and fingerprint.file_type != "regular":
+        return None
+    return fingerprint
+
+
+def _state_tampered_result(
+    spec: TaskSpec,
+    task: SpecTask,
+    state: ExecutionState,
+    base_sha: str,
+    state_rel: str,
+) -> CycleResult:
+    emit(
+        SCOPE_VIOLATION,
+        f"STATE_TAMPERED: {state_rel}",
+        task_id=spec.id,
+        state=ExecutionStatus.SCOPE_VIOLATION.value,
+        extra={"spec_task": task.id, "code": "STATE_TAMPERED"},
+    )
+    try:
+        state = apply_transition(
+            state,
+            ExecutionStatus.SCOPE_VIOLATION,
+            current_task=task.id,
+            last_result="FAILED",
+        )
+    except AgentError:
+        pass
+    scope = ScopeCheckResult(
+        allowed=False,
+        changed_paths=(state_rel,),
+        violation_paths=(state_rel,),
+        reason="STATE_TAMPERED",
+    )
+    return CycleResult(
+        outcome="SCOPE_VIOLATION",
+        spec_id=spec.id,
+        task_id=task.id,
+        base_sha=base_sha,
+        state=state,
+        scope=scope,
+        classification=FailureClass.ESCALATION_REQUIRED,
+        repair_attempts=state.repair_attempts,
+        message=f"STATE_TAMPERED: {state_rel}",
     )

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import stat
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -18,6 +21,90 @@ from agent.spec import TaskSpec
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "execution-state.schema.json"
 
 _EXECUTION_STATE_SCHEMA: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class StateFileFingerprint:
+    exists: bool
+    file_type: str
+    content_sha256: str | None
+    symlink_target: str | None
+
+
+def current_state_relpath(spec_id: str, config: AgentConfig) -> str:
+    directory = Path(config.state.directory).as_posix().strip("/")
+    return f"{directory}/{spec_id}.json"
+
+
+def fingerprint_state_file(path: Path | str) -> StateFileFingerprint:
+    """Fingerprint a current-state file without following symlinks."""
+    target = Path(path)
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return StateFileFingerprint(
+            exists=False,
+            file_type="absent",
+            content_sha256=None,
+            symlink_target=None,
+        )
+    except OSError as exc:
+        raise AgentError.environment_failure(
+            f"current state could not be fingerprinted: {target}",
+            code="STATE_TAMPERED",
+        ) from exc
+
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="symlink",
+            content_sha256=None,
+            symlink_target=os.readlink(target),
+        )
+    if stat.S_ISREG(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="regular",
+            content_sha256=_sha256_regular_file(target),
+            symlink_target=None,
+        )
+    if stat.S_ISDIR(mode):
+        return StateFileFingerprint(
+            exists=True,
+            file_type="directory",
+            content_sha256=None,
+            symlink_target=None,
+        )
+    return StateFileFingerprint(
+        exists=True,
+        file_type="other",
+        content_sha256=None,
+        symlink_target=None,
+    )
+
+
+def _sha256_regular_file(path: Path) -> str:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise AgentError.environment_failure(
+            f"current state could not be read: {path}",
+            code="STATE_TAMPERED",
+        ) from exc
+    try:
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
 
 
 class ExecutionStatus(StrEnum):
