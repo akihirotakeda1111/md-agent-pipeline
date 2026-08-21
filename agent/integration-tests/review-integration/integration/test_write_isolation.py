@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .common import current_feedback, github_responses, request
+from .common import coderabbit_completed, current_feedback, github_responses, request
 from .harness.fake_classifier import classification
 from .harness.fake_codex import CodexStep
 
@@ -11,7 +11,9 @@ def test_codex_has_no_github_or_classifier_authority(
     phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )

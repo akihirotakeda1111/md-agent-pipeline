@@ -43,6 +43,7 @@ def test_duplicate_status_alone_does_not_establish_readiness(
         git_repo,
         [duplicate, pending],
         load_processed_reviews=[[processed_record(duplicate)]],
+        **coderabbit_completed(git_repo),
     )
     services = service_factory(
         github=responses,
@@ -84,6 +85,7 @@ def test_unprocessed_current_feedback_prevents_readiness(
         git_repo,
         [processed, pending],
         load_processed_reviews=[[processed_record(processed)]],
+        **coderabbit_completed(git_repo),
     )
     services = service_factory(
         github=responses,

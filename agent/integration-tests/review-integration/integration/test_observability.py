@@ -10,7 +10,9 @@ def test_review_repair_emits_contractual_partial_order(
     phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
@@ -34,7 +36,9 @@ def test_review_repair_emits_contractual_partial_order(
 
 def test_escalation_emits_review_escalated(phase7_driver, spec_path, git_repo, service_factory):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("UNCERTAIN")],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)

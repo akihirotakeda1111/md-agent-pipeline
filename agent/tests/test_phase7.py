@@ -346,6 +346,8 @@ class FakeGithub:
             return 200, list(self.review_comments)
         if method == "GET" and path.endswith("/issues/7/comments"):
             return 200, list(self.issue_comments)
+        if method == "GET" and path.endswith("/issues/7/labels"):
+            return 200, [{"name": name} for name in sorted(self.issue_labels)]
         if method == "GET" and "/labels/" in path:
             name = unquote(path.rsplit("/", 1)[-1])
             if name in self.labels:
@@ -847,6 +849,66 @@ def test_in_progress_terminal_blocks_ready(tmp_path: Path) -> None:
     _assert_exclusive_issue_label(fake, "agent:review")
 
 
+def test_in_progress_with_feedback_does_not_classify(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(
+        head_sha=head_sha(repo),
+        conclusion="",
+        status="in_progress",
+        completed_at="2026-08-20T01:00:00Z",
+    )
+    called = {"n": 0}
+
+    def classifier(item, spec):
+        called["n"] += 1
+        return _result(ReviewClassification.UNCERTAIN)
+
+    result = _run(repo, fake, classifier=classifier)
+    assert result.outcome == "IN_REVIEW"
+    assert called["n"] == 0
+    _assert_exclusive_issue_label(fake, "agent:review")
+
+
+def test_same_head_escalated_is_sticky_against_ready(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="skipped")
+    first = _run(repo, fake)
+    assert first.outcome == "ESCALATED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    fake.check_runs.clear()
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="success")
+    second = _run(
+        repo,
+        fake,
+        classifier=lambda item, spec: _result(ReviewClassification.NON_ACTIONABLE),
+    )
+    assert second.outcome == "ESCALATED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+
+
+def test_new_head_does_not_inherit_previous_terminal(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_check_run(head_sha=head_sha(repo), conclusion="skipped")
+    first = _run(repo, fake)
+    assert first.outcome == "ESCALATED"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    (repo / "src" / "app.py").write_text("next\n", encoding="utf-8")
+    _git(repo, "add", "src/app.py")
+    _git(repo, "commit", "-m", "next")
+    fake.pull["head"]["sha"] = head_sha(repo)
+    fake.check_runs.clear()
+    second = _run(repo, fake)
+    assert second.outcome == "IN_REVIEW"
+    _assert_exclusive_issue_label(fake, "agent:review")
+
+
 @pytest.mark.parametrize(
     "case",
     _observed_loop_cases(),
@@ -959,6 +1021,7 @@ def test_forbidden_path_review_escalates_without_codex(tmp_path: Path) -> None:
         raise AssertionError("codex must not run")
 
     fake.add_review_comment(path="specs/tasks/review-demo.md", commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
     result = _run(repo, fake, classifier=classifier, executor=executor)
     assert result.outcome == "ESCALATED"
     assert called["n"] == 0
@@ -1160,6 +1223,7 @@ def test_invalid_classifier_json_escalates(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
 
     def classifier(item, spec):
         raise AgentError.invalid_input("bad json", code="INVALID_CLASSIFIER_JSON")
@@ -1174,6 +1238,7 @@ def test_review_attempt_increments_and_limit(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
     fake.issue_comments.append(
         {
             "id": 9,
@@ -1208,6 +1273,7 @@ def test_review_fix_scope_violation(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
 
     def executor(command, *, cwd, env, timeout, stdin):
         Path(cwd, "specs", "tasks", "review-demo.md").write_text("tamper\n", encoding="utf-8")
@@ -1228,6 +1294,7 @@ def test_review_fix_isolates_credentials(tmp_path: Path) -> None:
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
     fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
     seen: dict[str, str | None] = {}
 
     def executor(command, *, cwd, env, timeout, stdin):

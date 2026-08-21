@@ -196,10 +196,16 @@ class _FakeGitHubClient:
 
     def add_issue_labels(self, issue_number: int, labels: list[str]) -> None:
         self._fake.set_labels(issue_number=issue_number, labels=labels)
+        self._fake.issue_labels.update(str(name) for name in labels)
 
     def remove_issue_label(self, issue_number: int, name: str) -> None:
         self._fake.request("remove_label", issue_number=issue_number, name=name)
         self._fake.labels.discard(name)
+        self._fake.issue_labels.discard(name)
+
+    def list_issue_labels(self, issue_number: int) -> list[dict[str, Any]]:
+        self._fake.request("list_issue_labels", issue_number=issue_number)
+        return [{"name": name} for name in sorted(self._fake.issue_labels)]
 
     def _tracking_comment(self) -> dict[str, Any] | None:
         if self._fake.tracking_body:
