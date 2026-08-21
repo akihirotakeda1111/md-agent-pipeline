@@ -3,7 +3,7 @@ schema_version: 1
 id: todo-api-phase7
 title: Implement the Go TODO REST API comparison workload
 status: PENDING
-base_branch: baseline/todo-api
+base_branch: baseline/todo-api-phase7
 target_branch: feature/todo-api-phase7
 
 allowed_paths:
