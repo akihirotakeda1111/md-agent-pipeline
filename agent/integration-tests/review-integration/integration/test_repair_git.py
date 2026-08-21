@@ -6,6 +6,7 @@ from .common import (
     assert_linear_push,
     assert_no_codex,
     assert_no_git_write,
+    coderabbit_completed,
     current_feedback,
     github_responses,
     request,
@@ -19,7 +20,9 @@ from .harness.observations import event_names
 
 def actionable_services(service_factory, git_repo, change):
     return service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE", confidence=0.93)],
         codex=[CodexStep(change)],
     )
@@ -41,7 +44,9 @@ def test_repair_runs_scope_all_validation_final_verification_then_push(
 
 def test_attempt_limit_escalates_before_codex(phase7_driver, spec_path, git_repo, service_factory):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE")],
     )
     review_request = replace(request(spec_path, git_repo), review_attempts=1)

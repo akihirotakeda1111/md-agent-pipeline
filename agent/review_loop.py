@@ -40,7 +40,7 @@ from agent.gitutil import (
     run_git,
 )
 from agent.gitwrite import commit_paths, head_sha, push_branch
-from agent.labels import apply_status_label, ensure_review_labels
+from agent.labels import apply_status_label, current_terminal_status_label, ensure_review_labels
 from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error, is_failed
 from agent.pr import parse_work_unit_marker
@@ -81,6 +81,11 @@ CLASSIFIER_FAIL_CLOSED = frozenset(
         "CLASSIFIER_INCOMPLETE",
     }
 )
+STICKY_LABEL_OUTCOMES = {
+    "agent:ready": "READY_FOR_HUMAN",
+    "agent:escalated": "ESCALATED",
+    "agent:failed": "FAILED",
+}
 
 
 @dataclass
@@ -200,6 +205,11 @@ def _run_review(
         client, pull_number, spec, track_author=cfg.review.track_author
     )
     terminal = collect_coderabbit_terminal(client, head_sha_expected, cfg.coderabbit)
+    sticky = _sticky_terminal_result(
+        client, spec, pull_number, track, head_sha_expected, terminal
+    )
+    if sticky is not None:
+        return sticky
     if terminal.is_escalating():
         return _escalate(
             client,
@@ -208,6 +218,13 @@ def _run_review(
             track,
             f"CodeRabbit terminal is {terminal.kind.value}",
             terminal.escalation_code(),
+            track_id=track_id,
+            head_sha=head_sha_expected,
+        )
+    if not terminal.is_completed():
+        apply_status_label(client, pull_number, "agent:review")
+        return _in_review(
+            spec, pull_number, track, _waiting_for_coderabbit_message(terminal)
         )
     apply_status_label(client, pull_number, "agent:review")
     items = collect_review_feedback(client, pull_number, actor=cfg.coderabbit.actor)
@@ -256,7 +273,6 @@ def _run_review(
         updated = with_processed(
             track, tuple(skipped + [item.identity for item in forbidden]), increment=False
         )
-        persist_review_track(client, pull_number, track_id, updated)
         return _escalate(
             client,
             spec,
@@ -264,6 +280,8 @@ def _run_review(
             updated,
             "review references a forbidden path",
             "REVIEW_POLICY_ESCALATED",
+            track_id=track_id,
+            head_sha=head_sha_expected,
         )
 
     cap = cfg.review.max_comments_per_run
@@ -297,7 +315,6 @@ def _run_review(
             if exc.code not in CLASSIFIER_FAIL_CLOSED:
                 raise
             updated = with_processed(track, tuple([*skipped, item.identity]), increment=False)
-            persist_review_track(client, pull_number, track_id, updated)
             return _escalate(
                 client,
                 spec,
@@ -305,6 +322,8 @@ def _run_review(
                 updated,
                 str(exc),
                 exc.code or "INVALID_CLASSIFIER_JSON",
+                track_id=track_id,
+                head_sha=head_sha_expected,
             )
         emit(
             REVIEW_CLASSIFIED,
@@ -333,7 +352,6 @@ def _run_review(
             if decision.action is ReviewPolicyAction.ESCALATE
         ]
         updated = with_processed(track, identities, increment=False)
-        persist_review_track(client, pull_number, track_id, updated)
         return _escalate(
             client,
             spec,
@@ -341,6 +359,8 @@ def _run_review(
             updated,
             reasons[0],
             "REVIEW_POLICY_ESCALATED",
+            track_id=track_id,
+            head_sha=head_sha_expected,
         )
 
     accepted = [
@@ -374,7 +394,6 @@ def _run_review(
     limit = review_attempt_limit(spec, cfg)
     if track.review_attempts >= limit:
         updated = with_processed(track, identities, increment=False)
-        persist_review_track(client, pull_number, track_id, updated)
         return _escalate(
             client,
             spec,
@@ -382,6 +401,8 @@ def _run_review(
             updated,
             "review_attempt_limit reached",
             "REVIEW_ATTEMPT_LIMIT",
+            track_id=track_id,
+            head_sha=head_sha_expected,
         )
 
     emit(REVIEW_FIX_STARTED, "codex review repair started", task_id=spec.id, phase="review")
@@ -665,15 +686,45 @@ def _convergence_result(
             "unprocessed review comments remain on the current HEAD",
         )
     if not terminal.is_completed():
-        waiting = (
-            "CodeRabbit review is still in progress on the current HEAD"
-            if terminal.kind is CodeRabbitTerminalKind.IN_PROGRESS
-            else "no CodeRabbit terminal evidence on the current HEAD yet"
-        )
+        waiting = _waiting_for_coderabbit_message(terminal)
         return _in_review(spec, pull_number, track, waiting)
     bound = with_processed(track, (), increment=False, head_sha=head_sha_expected)
     persist_review_track(client, pull_number, track_id, bound)
     return _ready(client, spec, pull_number, bound, message)
+
+
+def _waiting_for_coderabbit_message(terminal: CodeRabbitTerminal) -> str:
+    if terminal.kind is CodeRabbitTerminalKind.IN_PROGRESS:
+        return "CodeRabbit review is still in progress on the current HEAD"
+    return "no CodeRabbit terminal evidence on the current HEAD yet"
+
+
+def _sticky_terminal_result(
+    client: GitHubClient,
+    spec: TaskSpec,
+    pull_number: int,
+    track: ReviewTrack,
+    head_sha_expected: str,
+    terminal: CodeRabbitTerminal,
+) -> ReviewResult | None:
+    if track.head_sha != head_sha_expected:
+        return None
+    label = current_terminal_status_label(client, pull_number)
+    if label is None:
+        return None
+    outcome = STICKY_LABEL_OUTCOMES[label]
+    code = None
+    if outcome == "ESCALATED" and terminal.is_escalating():
+        code = terminal.escalation_code()
+    return ReviewResult(
+        outcome=outcome,
+        spec_id=spec.id,
+        pull_number=pull_number,
+        message=f"keeping {outcome} for unchanged HEAD",
+        code=code,
+        processed=track.processed,
+        review_attempts=track.review_attempts,
+    )
 
 
 def _in_review(
@@ -718,7 +769,12 @@ def _escalate(
     track: ReviewTrack,
     message: str,
     code: str,
+    *,
+    track_id: int | None,
+    head_sha: str,
 ) -> ReviewResult:
+    bound = with_processed(track, (), increment=False, head_sha=head_sha)
+    persist_review_track(client, pull_number, track_id, bound)
     apply_status_label(client, pull_number, "agent:escalated")
     notice = EscalationNotice(
         task_id=spec.id,
@@ -742,8 +798,8 @@ def _escalate(
         pull_number=pull_number,
         message=message,
         code=code,
-        processed=track.processed,
-        review_attempts=track.review_attempts,
+        processed=bound.processed,
+        review_attempts=bound.review_attempts,
     )
 
 

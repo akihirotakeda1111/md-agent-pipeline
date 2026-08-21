@@ -25,6 +25,7 @@ AGENT_STATUS_LABELS = tuple(AGENT_LABELS)
 PHASE6_APPLIED_LABELS = ("agent:ready", "agent:escalated", "agent:failed")
 PHASE7_APPLIED_LABELS = ("agent:review", "agent:ready", "agent:escalated", "agent:failed")
 EXCLUSIVE_STATUS_LABELS = ("agent:review", "agent:ready", "agent:escalated", "agent:failed")
+TERMINAL_STATUS_LABELS = ("agent:failed", "agent:escalated", "agent:ready")
 
 
 def ensure_agent_labels(client: GitHubClient) -> None:
@@ -33,6 +34,22 @@ def ensure_agent_labels(client: GitHubClient) -> None:
 
 def ensure_review_labels(client: GitHubClient) -> None:
     _ensure_named_labels(client, PHASE7_APPLIED_LABELS)
+
+
+def current_terminal_status_label(client: GitHubClient, issue_number: int) -> str | None:
+    """Return the sticky terminal label on the issue, if any.
+
+    Prefer failed over escalated over ready when exclusive labels were stacked.
+    """
+    names: set[str] = set()
+    for item in client.list_issue_labels(issue_number):
+        name = item.get("name")
+        if isinstance(name, str) and name in TERMINAL_STATUS_LABELS:
+            names.add(name)
+    for label in TERMINAL_STATUS_LABELS:
+        if label in names:
+            return label
+    return None
 
 
 def apply_status_label(client: GitHubClient, issue_number: int, status_label: str) -> None:

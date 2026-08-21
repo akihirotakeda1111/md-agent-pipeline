@@ -18,7 +18,9 @@ def test_actionable_high_confidence_allowed_path_runs_repair(
     phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE", confidence=0.93)],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
@@ -32,7 +34,9 @@ def test_actionable_low_confidence_escalates_without_codex(
     phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE", confidence=0.79)],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)
@@ -44,7 +48,9 @@ def test_actionable_referenced_path_outside_allowed_scope_escalates_without_code
     phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification("ACTIONABLE", paths=("docs/README.md",))],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)
@@ -74,7 +80,9 @@ def test_escalating_classifications_do_not_run_codex(
     classification_name, phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[classification(classification_name)],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)
@@ -95,7 +103,9 @@ def test_invalid_classifier_output_fails_closed(
     raw, phase7_driver, spec_path, git_repo, service_factory
 ):
     services = service_factory(
-        github=github_responses(git_repo, [current_feedback(git_repo)]),
+        github=github_responses(
+            git_repo, [current_feedback(git_repo)], **coderabbit_completed(git_repo)
+        ),
         classifier=[ClassifierStep(raw)],
     )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)

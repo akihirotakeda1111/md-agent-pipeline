@@ -24,6 +24,7 @@ class FakeGitHub:
         self.tracking_id: int | None = None
         self.issue_comments: list[dict[str, Any]] = []
         self.labels: set[str] = set()
+        self.issue_labels: set[str] = set()
         self.next_id = 8000
 
     def current(self, operation: str, default: Any = None) -> Any:

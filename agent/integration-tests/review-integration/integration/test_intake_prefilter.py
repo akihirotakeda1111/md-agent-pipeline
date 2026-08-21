@@ -21,7 +21,7 @@ def test_event_is_only_wakeup_and_current_feedback_is_refetched(
 ):
     feedback = current_feedback(git_repo)
     services = service_factory(
-        github=github_responses(git_repo, [feedback]),
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
         classifier=[classification("NON_ACTIONABLE", paths=())],
     )
     phase7_driver.run_review(
@@ -122,7 +122,9 @@ def test_obvious_forbidden_path_is_rejected_before_classifier(
 ):
     feedback = current_feedback(git_repo)
     feedback["path"] = "specs/tasks/phase7-integration.md"
-    services = service_factory(github=github_responses(git_repo, [feedback]))
+    services = service_factory(
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo))
+    )
     result = phase7_driver.run_review(request(spec_path, git_repo), services)
     assert result.status.upper() in {"SKIPPED", "ESCALATED"}
     assert_no_codex(services)
