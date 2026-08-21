@@ -30,6 +30,7 @@ class ReviewRunRequest:
     expected_head_sha: str
     review_attempts: int = 0
     environment: dict[str, str] = field(default_factory=dict)
+    auto_repair_enabled: bool | None = None
 
 
 @dataclass

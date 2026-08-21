@@ -21,12 +21,14 @@ def test_duplicate_event_does_not_repeat_repair(
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    first = phase7_driver.run_review(request(spec_path, git_repo), services)
+    first = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(first, "REVIEW_FIX_PUSHED")
     services.github.current("get_pull_request")["head"]["sha"] = git_repo.head
     services.github.current("list_review_feedback")[0]["head_sha"] = git_repo.head
     second = phase7_driver.run_review(
-        request(spec_path, git_repo, head_sha=git_repo.head), services
+        request(spec_path, git_repo, head_sha=git_repo.head, auto_repair_enabled=True), services
     )
     assert second.status.upper() == "IN_REVIEW"
     assert len(services.codex.invocations) == 1
@@ -92,7 +94,9 @@ def test_unprocessed_current_feedback_prevents_readiness(
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     assert result.status.upper() == "REVIEW_FIX_PUSHED"
     assert result.status.upper() != "READY_FOR_HUMAN"
 

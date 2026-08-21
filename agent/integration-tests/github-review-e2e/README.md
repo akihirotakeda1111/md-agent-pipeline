@@ -3,8 +3,10 @@
 ## Purpose and boundary
 
 Production `agent-execute.yml`でReal PRを作成し、その後のProduction
-`agent-review.yml`、Real CodeRabbit、Real OpenAI semantic classifier、Real Codex review
-repair、Real GitHub pushを、GitHub上のobservable stateだけで確認するmanual acceptance suiteです。
+`agent-review.yml`、Real CodeRabbit、Real OpenAI semantic classifier、
+Production review Policy の human handoff（MVP では `auto_repair_enabled: false`）、
+必要なら feature-gated な Real Codex review repair、Real GitHub pushを、
+GitHub上のobservable stateだけで確認するmanual acceptance suiteです。
 
 Phase 6 `github-pr-e2e`の続きですが、suiteは分離しています。
 Production workflow、review Policy、convergence判定をコピー・再実装しません。Fake service、shadow
@@ -68,8 +70,11 @@ Production execute
 -> agent-review.yml (`check_run` completed and/or `status`; comments are not subscribed)
 -> Production observable terminal on current HEAD
      READY_FOR_HUMAN + agent:ready + workflow completed + PR unmerged
-     or ESCALATED + agent:escalated（CodeRabbit SKIPPED 等の仕様どおりの到達含む）
--> [ACTIONABLE repair] Real Codex repair -> linear push -> wait again on new HEAD
+     or ESCALATED + agent:escalated（CodeRabbit SKIPPED、MVP の ACTIONABLE human handoff 等の仕様どおりの到達含む）
+-> [ACTIONABLE repair] `review.auto_repair_enabled: true` のときだけ Real Codex repair -> linear push -> wait again on new HEAD
+
+MVPでは自動Repairを意図的に延期し、CodeRabbitレビュー結果を人間へhandoffする。
+Repair機能は将来拡張としてfeature-gatedで保持する。本番 config は `review.auto_repair_enabled: false` のため、ACTIONABLE は通常 `ESCALATED` で終わる。
 ```
 
 E2E の終了条件は Production の observable state です。Harness は `coderabbit_terminal() == COMPLETED` を必須にしません。CodeRabbit の Checks / commit status は外部サービスが動いた診断情報として report の `terminal_transports` に残し、READY 判定には使いません。Deliver 直後 HEAD と repair 後 HEAD について、`check_run` / `status` の API 有無、workflow 起動数、prepare 結果、COMPLETED / SKIPPED の観測有無を記録します。

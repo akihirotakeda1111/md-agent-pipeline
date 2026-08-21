@@ -13,6 +13,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -526,6 +527,10 @@ def _result_from_review(result: ReviewResult, observations: ObservationLog) -> R
 class ProductionPhase7Driver:
     def run_review(self, request: ReviewRunRequest, services: ServiceBundle) -> ReviewRunResult:
         cfg = load_config()
+        if request.auto_repair_enabled is not None:
+            cfg = replace(
+                cfg, review=replace(cfg.review, auto_repair_enabled=request.auto_repair_enabled)
+            )
         spec = parse_spec(request.spec_path)
         github = _FakeGitHubClient(
             services.github,

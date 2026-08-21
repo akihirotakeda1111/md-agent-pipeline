@@ -131,7 +131,7 @@ python agent/integration-tests/github-pr-e2e/run.py --repo OWNER/REPO
 
 ### Phase 7 — CodeRabbit Review
 
-CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workflow `.github/workflows/agent-review.yml` は当面 `check_run` completed と commit `status` の両方を受け、コメント系 event では起動しません。prepare は event SHA と current `pull.head.sha` が一致しない古い terminal を skip します。起動後は GitHub API から現状の PR・Checks・commit statuses・feedback を再取得し、wake-up payload は Source of Truth にしません。READY は `CODERABBIT_COMPLETED` かつ current HEAD 一致かつ未処理 ACTIONABLE なしのときだけです。feedback 0件でも COMPLETED なら READY を許可し、SKIPPED / failure family は ESCALATED です。prepare は repository default の Orchestrator を使い、Task Spec は `pull.head.sha` の Contents API から解決します。review job の repair workspace は exact `pull.head.sha` です。LLM API は unit test で mock します。
+CodeRabbit 完了待ちは `agent-execute.yml` に追加しません。別 workflow `.github/workflows/agent-review.yml` は当面 `check_run` completed と commit `status` の両方を受け、コメント系 event では起動しません。prepare は event SHA と current `pull.head.sha` が一致しない古い terminal を skip します。起動後は GitHub API から現状の PR・Checks・commit statuses・feedback を再取得し、wake-up payload は Source of Truth にしません。READY は `CODERABBIT_COMPLETED` かつ current HEAD 一致かつ未処理 ACTIONABLE なしのときだけです。feedback 0件でも COMPLETED なら READY を許可し、SKIPPED / failure family は ESCALATED です。**MVPでは自動Repairを意図的に延期し、CodeRabbitレビュー結果を人間へhandoffする。** `review.auto_repair_enabled` は `false` です。ACTIONABLE は confidence に関係なく `ESCALATED`（human handoff）になり、Codex Repair は実行しません。Repair機能は将来拡張としてfeature-gatedで保持します。prepare は repository default の Orchestrator を使い、Task Spec は `pull.head.sha` の Contents API から解決します。review job の workspace は exact `pull.head.sha` です。LLM API は unit test で mock します。
 
 ```bash
 python -m pytest agent/tests/test_phase7.py agent/tests/test_review_workflow.py
@@ -140,7 +140,7 @@ python agent/integration-tests/review-integration/run.py --production-root .
 
 ### Phase 7 — Real GitHub E2E
 
-本番 `agent-execute.yml` と `agent-review.yml` をそのまま使い、Real CodeRabbit、Real classifier、Real Codex review repair、Real GitHub 上の Production terminal 収束を確認します。Scenario A の終了条件は `READY_FOR_HUMAN`（`agent:ready`）または仕様どおりの `ESCALATED` であり、Harness は CodeRabbit Checks を READY 判定に使いません。E2E専用workflowや Fake service は使いません。Task Spec の `base_branch` は temporary branch（`e2e/phase7-*`）自身です。repository default へは commit しません。
+本番 `agent-execute.yml` と `agent-review.yml` をそのまま使い、Real CodeRabbit、Real classifier、Real GitHub 上の Production terminal 収束を確認します。MVP では自動Repairを延期するため、Scenario A の終了条件は `READY_FOR_HUMAN`（`agent:ready`）または仕様どおりの `ESCALATED`（ACTIONABLE の human handoff を含む）です。Harness は CodeRabbit Checks を READY 判定に使いません。E2E専用workflowや Fake service は使いません。Task Spec の `base_branch` は temporary branch（`e2e/phase7-*`）自身です。repository default へは commit しません。
 
 `gh` には対象repositoryについて次が必要です。
 
@@ -208,12 +208,12 @@ Phase 7 の実 GitHub 実行には追加の人間側設定が必要です。
 - **CodeRabbit actor**: テスト PR の GitHub event で実際の `sender.login` / `actor.login` を確認し、その値だけを `agent/config.json` の `coderabbit.actor` に入れる。bot 名を推測で確定しない。識別ロジックへ bot 名を hard-code しない。`agent-review.yml` の `openai/codex-action` は `allow-bots: true` を使わず、prepare がこの actor を `allow-bot-users` へ渡す（sandbox bootstrap のみ。review prompt は渡さない）
 - **CodeRabbit terminal identity**: `coderabbit.check_app_slug` と `coderabbit.status_context` も実 check / commit status から確認して入れる。Checks と commit statuses の両方を再取得し、live COMPLETED/SKIPPED payload で transport をロックするまではどちらも購読する。コメント本文は terminal 判定に使わない
 - **CodeRabbit review status**: `.coderabbit.yaml` の `reviews.review_status`、`reviews.review_progress`、`reviews.commit_status` を有効にする。Checks と commit status の dual wake-up を観測するため明示する。コメント本文は terminal 判定に使わない
-- **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。修正は Classifier → Policy → Codex だけ
+- **CodeRabbit Autofix**: 使わない。`.coderabbit.yaml` で `reviews.finishing_touches.autofix.enabled: false`、`simplify.enabled: false`、`request_changes_workflow: false`。MVP の修正判断は人間。`review.auto_repair_enabled: true` のときだけ Classifier → Policy → Codex Repair
 - **CodeRabbit PR summary**: PR 本文（work-unit marker）を書き換えない。`high_level_summary: false` と `high_level_summary_in_walkthrough: true`
 - **GitHub Secrets**: Repository Secret `REVIEW_CLASSIFIER_API_KEY`（`agent-review.yml` の review orchestrator step のみ）。CodeRabbit 用ではなく Semantic Review Classifier 用。`CODEX_API_KEY` と共有しない。prepare job と execute/deliver には渡さない
 - **Actions permissions**: `agent-review.yml` は default `contents: read`。prepare は `contents: read` / `pull-requests: read`（Checks / Statuses API は呼ばない）。review job は `contents: write` / `pull-requests: write` / `issues: write` / `checks: read` / `statuses: read`（current HEAD の Check Run と commit status の再取得）。`checks: write` と `statuses: write` は付けない。`pull_request_target` は使わない
 - **Allow GitHub Actions to write to feature branches**: review repair の commit/push が branch protection で拒否されないこと。force push / amend / rebase は使わない
-- labels: Deliver は PR 作成時に `agent:review` を適用する。CodeRabbit が current HEAD で `CODERABBIT_COMPLETED` かつ未処理 ACTIONABLE がないときだけ `agent:ready`。`CODERABBIT_SKIPPED` / failure family、限界・衝突・uncertain は `agent:escalated`、再試行可能な障害は `agent:failed`。exclusive status を重ねない
+- labels: Deliver は PR 作成時に `agent:review` を適用する。CodeRabbit が current HEAD で `CODERABBIT_COMPLETED` かつ未処理 ACTIONABLE がないときだけ `agent:ready`。`CODERABBIT_SKIPPED` / failure family、ACTIONABLE（MVP deferred repair）、限界・衝突・uncertain は `agent:escalated`、再試行可能な障害は `agent:failed`。exclusive status を重ねない
 - **Merge**: 自動 merge しない。Human が PR を merge する
 - **Classifier model**: `agent/config.json` の `review.classifier_model` は OpenAI Structured Outputs の snapshot `gpt-5.4-nano-2026-03-17` を pin する。架空の model 名は使わない
 

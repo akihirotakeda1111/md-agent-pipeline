@@ -52,7 +52,9 @@ def test_completed_actionable_repairs_and_is_not_ready(
         classifier=[classification("ACTIONABLE", confidence=0.93)],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(request(spec_path, git_repo), services)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
     require_status(result, "REVIEW_FIX_PUSHED")
     assert result.status.upper() != "READY_FOR_HUMAN"
     assert len(services.classifier.invocations) == 1

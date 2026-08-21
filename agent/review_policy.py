@@ -11,12 +11,19 @@ from agent.review_types import (
 from agent.scope import path_is_in_scope
 from agent.spec import TaskSpec
 
+AUTO_REPAIR_DEFERRED_REASON = "automatic review repair is deferred"
+AUTO_REPAIR_DEFERRED_HUMAN_ACTION = (
+    "Inspect CodeRabbit findings and decide whether to apply a fix. "
+    "Automatic review repair is deferred."
+)
+
 
 def decide_review_policy(
     result: ClassificationResult,
     spec: TaskSpec,
     *,
     confidence_threshold: float,
+    auto_repair_enabled: bool = False,
 ) -> PolicyDecision:
     if result.classification is ReviewClassification.NON_ACTIONABLE:
         return PolicyDecision(
@@ -46,6 +53,12 @@ def decide_review_policy(
         return PolicyDecision(
             ReviewPolicyAction.ESCALATE,
             f"unsupported classification {result.classification.value}",
+            result.classification,
+        )
+    if not auto_repair_enabled:
+        return PolicyDecision(
+            ReviewPolicyAction.ESCALATE,
+            AUTO_REPAIR_DEFERRED_REASON,
             result.classification,
         )
     if result.confidence < confidence_threshold:

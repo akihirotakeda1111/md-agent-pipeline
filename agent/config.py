@@ -51,6 +51,7 @@ class ReviewConfig:
     provider: str
     classifier_model: str
     confidence_threshold: float
+    auto_repair_enabled: bool
     api_key_env: str
     track_author: str
     max_comments_per_run: int | None
@@ -165,6 +166,9 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
             ),
             confidence_threshold=_optional_unit_float(
                 review, "confidence_threshold", "review", default=0.80
+            ),
+            auto_repair_enabled=_optional_bool(
+                review, "auto_repair_enabled", "review", default=False
             ),
             api_key_env=_optional_non_empty_str(
                 review, "api_key_env", "review", default="REVIEW_CLASSIFIER_API_KEY"

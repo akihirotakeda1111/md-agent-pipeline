@@ -17,7 +17,7 @@ def test_codex_has_no_github_or_classifier_authority(
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    review_request = request(spec_path, git_repo)
+    review_request = request(spec_path, git_repo, auto_repair_enabled=True)
     review_request = replace(
         review_request,
         environment={**review_request.environment, "AGENT_PR_PAT": "pr-create-must-not-leak"},

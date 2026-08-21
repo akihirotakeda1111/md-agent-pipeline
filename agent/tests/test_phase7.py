@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -22,7 +23,7 @@ from agent.review_classify import classifier_error_for_http, parse_classificatio
 from agent.review_collect import collect_review_feedback
 from agent.review_filter import prefilter_reason
 from agent.review_loop import run_review
-from agent.review_policy import decide_review_policy
+from agent.review_policy import AUTO_REPAIR_DEFERRED_REASON, decide_review_policy
 from agent.review_prepare import prepare_review
 from agent.review_track import (
     REVIEW_STATE_START,
@@ -416,12 +417,20 @@ class FakeGithub:
         return GitHubClient(token="tok", repository="octo/repo", requester=self.requester)
 
 
+def _config(*, auto_repair_enabled: bool | None = None):
+    cfg = load_config()
+    if auto_repair_enabled is None:
+        return cfg
+    return replace(cfg, review=replace(cfg.review, auto_repair_enabled=auto_repair_enabled))
+
+
 def _run(
     repo: Path,
     fake: FakeGithub,
     *,
     classifier=None,
     executor=None,
+    auto_repair_enabled: bool | None = None,
 ):
     return run_review(
         repo_root=repo,
@@ -431,6 +440,7 @@ def _run(
         github=fake.client(),
         classifier=classifier,
         executor=executor,
+        config=_config(auto_repair_enabled=auto_repair_enabled),
         env={
             "CODEX_API_KEY": "codex-secret",
             "REVIEW_CLASSIFIER_API_KEY": "review-secret",
@@ -1063,6 +1073,38 @@ def test_valid_and_invalid_classifier_json() -> None:
 @pytest.mark.parametrize(
     ("label", "confidence", "paths", "action"),
     [
+        (ReviewClassification.ACTIONABLE, 0.93, ("src/app.py",), ReviewPolicyAction.ESCALATE),
+        (ReviewClassification.ACTIONABLE, 0.2, ("src/app.py",), ReviewPolicyAction.ESCALATE),
+        (ReviewClassification.NON_ACTIONABLE, 0.99, (), ReviewPolicyAction.IGNORE),
+        (ReviewClassification.OUT_OF_SCOPE, 0.99, ("src/app.py",), ReviewPolicyAction.ESCALATE),
+        (
+            ReviewClassification.CONFLICTS_WITH_SPEC,
+            0.99,
+            ("src/app.py",),
+            ReviewPolicyAction.ESCALATE,
+        ),
+        (ReviewClassification.UNCERTAIN, 0.99, ("src/app.py",), ReviewPolicyAction.ESCALATE),
+    ],
+)
+def test_mvp_policy_for_each_classification(
+    tmp_path: Path, label, confidence, paths, action
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    decision = decide_review_policy(
+        _result(label, confidence=confidence, paths=paths),
+        spec,
+        confidence_threshold=0.80,
+        auto_repair_enabled=False,
+    )
+    assert decision.action is action
+    if label is ReviewClassification.ACTIONABLE:
+        assert decision.reason == AUTO_REPAIR_DEFERRED_REASON
+
+
+@pytest.mark.parametrize(
+    ("label", "confidence", "paths", "action"),
+    [
         (ReviewClassification.ACTIONABLE, 0.93, ("src/app.py",), ReviewPolicyAction.FIX),
         (ReviewClassification.ACTIONABLE, 0.2, ("src/app.py",), ReviewPolicyAction.ESCALATE),
         (ReviewClassification.NON_ACTIONABLE, 0.99, (), ReviewPolicyAction.IGNORE),
@@ -1076,13 +1118,16 @@ def test_valid_and_invalid_classifier_json() -> None:
         (ReviewClassification.UNCERTAIN, 0.99, ("src/app.py",), ReviewPolicyAction.ESCALATE),
     ],
 )
-def test_policy_for_each_classification(tmp_path: Path, label, confidence, paths, action) -> None:
+def test_policy_for_each_classification_when_auto_repair_enabled(
+    tmp_path: Path, label, confidence, paths, action
+) -> None:
     repo = _repo(tmp_path)
     spec = _spec(repo)
     decision = decide_review_policy(
         _result(label, confidence=confidence, paths=paths),
         spec,
         confidence_threshold=0.80,
+        auto_repair_enabled=True,
     )
     assert decision.action is action
 
@@ -1094,11 +1139,18 @@ def test_actionable_empty_paths_escalates(tmp_path: Path) -> None:
         _result(ReviewClassification.ACTIONABLE, paths=()),
         spec,
         confidence_threshold=0.80,
+        auto_repair_enabled=True,
     )
     assert decision.action is ReviewPolicyAction.ESCALATE
 
 
-def _class_run(tmp_path: Path, label: ReviewClassification, *, confidence: float = 0.93):
+def _class_run(
+    tmp_path: Path,
+    label: ReviewClassification,
+    *,
+    confidence: float = 0.93,
+    auto_repair_enabled: bool | None = None,
+):
     repo = _repo(tmp_path)
     spec = _spec(repo)
     fake = FakeGithub(_pull(repo, spec))
@@ -1116,12 +1168,50 @@ def _class_run(tmp_path: Path, label: ReviewClassification, *, confidence: float
         fake,
         classifier=lambda item, spec: _result(label, confidence=confidence),
         executor=executor,
+        auto_repair_enabled=auto_repair_enabled,
     )
     return result, executed["n"]
 
 
+def test_auto_repair_disabled_actionable_escalates_without_codex(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    fake = FakeGithub(_pull(repo, spec))
+    fake.add_review_comment(commit_id=head_sha(repo))
+    fake.add_check_run(head_sha=head_sha(repo))
+
+    def executor(command, *, cwd, env, timeout, stdin):
+        raise AssertionError("codex must not run")
+
+    result = _run(
+        repo,
+        fake,
+        classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
+        executor=executor,
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.message == AUTO_REPAIR_DEFERRED_REASON
+    assert result.review_attempts == 0
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    notices = _escalation_notices(fake)
+    assert len(notices) == 1
+    body = str(notices[0]["body"])
+    assert AUTO_REPAIR_DEFERRED_REASON in body
+    assert "Inspect CodeRabbit findings" in body
+    assert "Repair Attempts: 0" in body
+
+
+def test_auto_repair_disabled_non_actionable_ready_for_human(tmp_path: Path) -> None:
+    result, count = _class_run(tmp_path, ReviewClassification.NON_ACTIONABLE)
+    assert result.outcome == "READY_FOR_HUMAN"
+    assert result.review_attempts == 0
+    assert count == 0
+
+
 def test_actionable_high_confidence_runs_repair(tmp_path: Path) -> None:
-    result, count = _class_run(tmp_path, ReviewClassification.ACTIONABLE)
+    result, count = _class_run(
+        tmp_path, ReviewClassification.ACTIONABLE, auto_repair_enabled=True
+    )
     assert result.outcome == "REVIEW_FIX_PUSHED"
     assert result.outcome != "READY_FOR_HUMAN"
     assert result.review_attempts == 1
@@ -1130,7 +1220,12 @@ def test_actionable_high_confidence_runs_repair(tmp_path: Path) -> None:
 
 
 def test_actionable_low_confidence_escalates(tmp_path: Path) -> None:
-    result, count = _class_run(tmp_path, ReviewClassification.ACTIONABLE, confidence=0.2)
+    result, count = _class_run(
+        tmp_path,
+        ReviewClassification.ACTIONABLE,
+        confidence=0.2,
+        auto_repair_enabled=True,
+    )
     assert result.outcome == "ESCALATED"
     assert count == 0
 
@@ -1259,6 +1354,7 @@ def test_review_attempt_increments_and_limit(tmp_path: Path) -> None:
         fake,
         classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
         executor=executor,
+        auto_repair_enabled=True,
     )
     assert result.outcome == "ESCALATED"
     assert result.code == "REVIEW_ATTEMPT_LIMIT"
@@ -1284,6 +1380,7 @@ def test_review_fix_scope_violation(tmp_path: Path) -> None:
         fake,
         classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
         executor=executor,
+        auto_repair_enabled=True,
     )
     assert result.outcome == "ESCALATED"
     assert result.code == "REVIEW_SCOPE_VIOLATION"
@@ -1311,6 +1408,7 @@ def test_review_fix_isolates_credentials(tmp_path: Path) -> None:
         fake,
         classifier=lambda item, spec: _result(ReviewClassification.ACTIONABLE),
         executor=executor,
+        auto_repair_enabled=True,
     )
     assert result.outcome == "REVIEW_FIX_PUSHED"
     assert seen["CODEX_API_KEY"] == "codex-secret"
