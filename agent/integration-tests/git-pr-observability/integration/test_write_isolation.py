@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 
 from .common import NEW_PR_GITHUB, delivery_request
@@ -73,7 +72,5 @@ def test_phase6_deliver_applies_review_waiting_label(
     phase6_driver.deliver(
         delivery_request(spec_path, git_repo, artifact_factory(spec_path)), services
     )
-    payload = json.dumps([item.payload for item in services.observations.github])
-    assert "agent:review" in payload
-    assert "agent:ready" not in payload
-    assert "agent:running" not in payload
+    applied = [call["labels"] for call in services.github.calls("set_labels")]
+    assert applied == [["agent:review"]]
