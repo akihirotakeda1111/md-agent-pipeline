@@ -22,8 +22,7 @@ reviews:
     # Official: empty list is default-branch only; extra patterns extend it.
     # e2e/phase7-.* is the isolated Phase 7 Real GitHub E2E base.
     base_branches:
-      - "^main$"
-      - "e2e/phase7-.*"
+      - "baseline/todo-api-phase7"
   review_status: true
   review_progress: true
   # Explicit for dual-transport observation. review_progress publishes Checks;
