@@ -31,7 +31,6 @@ from .models import (
 from .process import CommandError, run
 from .workflow import COMMENT_REVIEW_EVENTS
 
-
 ACTIVE_RUN_STATUSES = frozenset(
     {"queued", "in_progress", "waiting", "pending", "requested", "waiting_for_review"}
 )
@@ -45,9 +44,7 @@ CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE = "prepare_output_unavailable"
 CANDIDATE_REVIEW_PENDING = "review_pending"
 CANDIDATE_REVIEW_EXECUTED = "review_executed"
 REVIEW_SIGNAL_KINDS = frozenset({CANDIDATE_REVIEW_PENDING, CANDIDATE_REVIEW_EXECUTED})
-PREPARE_FAULT_KINDS = frozenset(
-    {CANDIDATE_PREPARE_FAILED, CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE}
-)
+PREPARE_FAULT_KINDS = frozenset({CANDIDATE_PREPARE_FAILED, CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE})
 _STABLE_CANDIDATE_KINDS = frozenset(
     {
         CANDIDATE_OTHER_PR,
@@ -116,9 +113,7 @@ def should_review_enabled(value: Any) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
 
 
-_GITHUB_LOG_TIMESTAMP = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s?"
-)
+_GITHUB_LOG_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s?")
 
 
 def log_line_message(line: str) -> str:
@@ -286,9 +281,7 @@ def choose_unseen_review_run(
     classified: list[dict[str, Any]], *, seen_ids: set[int]
 ) -> dict[str, Any] | None:
     unseen = [
-        item
-        for item in review_runs_from_classified(classified)
-        if int(item["id"]) not in seen_ids
+        item for item in review_runs_from_classified(classified) if int(item["id"]) not in seen_ids
     ]
     if not unseen:
         return None
@@ -303,14 +296,10 @@ def completed_review_run_for_terminal(
     terminal: str | None,
 ) -> dict[str, Any] | None:
     review_runs = review_runs_from_classified(classified)
-    active = [
-        item for item in review_runs if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
-    ]
+    active = [item for item in review_runs if str(item.get("status") or "") in ACTIVE_RUN_STATUSES]
     if pr_head_sha != current_head or active:
         return None
-    completed = [
-        item for item in review_runs if str(item.get("status") or "") == "completed"
-    ]
+    completed = [item for item in review_runs if str(item.get("status") or "") == "completed"]
     if terminal not in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"} or not completed:
         return None
     return sorted(
@@ -337,9 +326,7 @@ def raise_if_prepare_fault(snapshot: dict[str, Any]) -> None:
     )
 
 
-CODERABBIT_TERMINAL_KINDS = frozenset(
-    {KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED, KIND_AMBIGUOUS}
-)
+CODERABBIT_TERMINAL_KINDS = frozenset({KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED, KIND_AMBIGUOUS})
 PRODUCTION_TERMINAL_STATES = frozenset({"READY_FOR_HUMAN", "ESCALATED", "FAILED"})
 
 
@@ -374,8 +361,7 @@ def classify_scenario_a_timeout(
         }
     state = terminal_state(pr) if pr is not None else None
     kind = str(
-        (coderabbit_terminal or evidence.get("coderabbit_terminal") or {}).get("kind")
-        or KIND_NONE
+        (coderabbit_terminal or evidence.get("coderabbit_terminal") or {}).get("kind") or KIND_NONE
     )
     started = any(
         _candidate_classification(item) not in {CANDIDATE_OTHER_PR, CANDIDATE_STALE_HEAD, ""}
@@ -399,7 +385,10 @@ def classify_scenario_a_timeout(
     if state in PRODUCTION_TERMINAL_STATES and current_run_completed:
         if kind in CODERABBIT_TERMINAL_KINDS and not started:
             return ProductionBug(
-                "CodeRabbit terminal was observed but Agent Review workflow did not start (transport failure)",
+                (
+                    "CodeRabbit terminal was observed but Agent Review workflow "
+                    "did not start (transport failure)"
+                ),
                 evidence={**evidence, "failure_kind": "TRANSPORT_FAILURE"},
             )
         return ProductionBug(
@@ -421,7 +410,10 @@ def classify_scenario_a_timeout(
         )
     if kind in CODERABBIT_TERMINAL_KINDS and not started:
         return ProductionBug(
-            "CodeRabbit terminal was observed but Agent Review workflow did not start (transport failure)",
+            (
+                "CodeRabbit terminal was observed but Agent Review workflow "
+                "did not start (transport failure)"
+            ),
             evidence={**evidence, "failure_kind": "TRANSPORT_FAILURE"},
         )
     if (
@@ -502,7 +494,9 @@ class GitHub:
             viewer = self.api("user")
             data = self.api(f"repos/{self.repo}")
         except (CommandError, json.JSONDecodeError) as exc:
-            raise EnvironmentBlocker(f"GitHub authentication/repository preflight failed: {exc}") from exc
+            raise EnvironmentBlocker(
+                f"GitHub authentication/repository preflight failed: {exc}"
+            ) from exc
         permissions = data.get("permissions") or {}
         if not permissions.get("push"):
             raise EnvironmentBlocker("Harness credential does not have repository push permission")
@@ -528,7 +522,9 @@ class GitHub:
             expect_json=False,
         )
 
-    def list_workflow_runs(self, workflow_id: int, *, event: str | None = None) -> list[dict[str, Any]]:
+    def list_workflow_runs(
+        self, workflow_id: int, *, event: str | None = None
+    ) -> list[dict[str, Any]]:
         fields = {"per_page": "100"}
         if event:
             fields["event"] = event
@@ -570,7 +566,8 @@ class GitHub:
             matches = self.matching_runs(workflow_id, branch, sha, event)
             if len(matches) > 1:
                 raise AssertionError(
-                    f"ambiguous execute run: branch={branch} sha={sha} event={event} count={len(matches)}"
+                    f"ambiguous execute run: branch={branch} sha={sha} "
+                    f"event={event} count={len(matches)}"
                 )
             if len(matches) == 1:
                 return matches[0]
@@ -595,9 +592,7 @@ class GitHub:
                 if int(item["id"]) not in baseline_ids
             ]
             comment_runs = [
-                item
-                for item in observed
-                if str(item.get("event") or "") in COMMENT_REVIEW_EVENTS
+                item for item in observed if str(item.get("event") or "") in COMMENT_REVIEW_EVENTS
             ]
             if comment_runs:
                 raise ProductionBug(
@@ -675,7 +670,9 @@ class GitHub:
                 events.append(name)
         return ("observed" if events else "not_observable"), events
 
-    def pulls(self, head_branch: str, base_branch: str, *, state: str = "open") -> list[dict[str, Any]]:
+    def pulls(
+        self, head_branch: str, base_branch: str, *, state: str = "open"
+    ) -> list[dict[str, Any]]:
         return self.api(
             f"repos/{self.repo}/pulls",
             fields={
@@ -687,7 +684,9 @@ class GitHub:
         )
 
     def pr_evidence(self, number_or_data: int | dict[str, Any]) -> PullRequestEvidence:
-        number = number_or_data if isinstance(number_or_data, int) else int(number_or_data["number"])
+        number = (
+            number_or_data if isinstance(number_or_data, int) else int(number_or_data["number"])
+        )
         details = self.api(f"repos/{self.repo}/pulls/{number}")
         return PullRequestEvidence(
             number=int(details["number"]),
@@ -752,7 +751,8 @@ class GitHub:
             matching = [item for item in fresh if item.actor == actor]
             if matching:
                 # Some issue comments/reviews are not bound to a commit by GitHub's API.
-                # We record that limitation but require at least one real event from the configured actor.
+                # We record that limitation but require at least one real event
+                # from the configured actor.
                 return matching
             time.sleep(self.poll_seconds)
         raise ExternalServiceBlocker(
@@ -919,9 +919,7 @@ class GitHub:
             "check_run_workflow_starts": sum(
                 1 for item in workflow_runs if item["event"] == "check_run"
             ),
-            "status_workflow_starts": sum(
-                1 for item in workflow_runs if item["event"] == "status"
-            ),
+            "status_workflow_starts": sum(1 for item in workflow_runs if item["event"] == "status"),
             "workflow_runs": workflow_runs,
             "heads": head_rows,
             "completed_observed": KIND_COMPLETED in kinds,
@@ -1115,9 +1113,7 @@ class GitHub:
                 check_app_slug=check_app_slug,
                 status_context=status_context,
             )
-            candidates = new_terminal_wake_runs(
-                self.list_workflow_runs(workflow_id), baseline_ids
-            )
+            candidates = new_terminal_wake_runs(self.list_workflow_runs(workflow_id), baseline_ids)
             classified = [
                 self.classify_review_candidate(
                     item,
@@ -1131,9 +1127,7 @@ class GitHub:
                 raise_if_prepare_fault(snapshot)
             review_runs = review_runs_from_classified(classified)
             active = [
-                item
-                for item in review_runs
-                if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
+                item for item in review_runs if str(item.get("status") or "") in ACTIVE_RUN_STATUSES
             ]
             unseen_review = choose_unseen_review_run(classified, seen_ids=seen_ids)
 

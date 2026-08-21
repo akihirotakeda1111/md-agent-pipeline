@@ -153,8 +153,7 @@ def assert_review_workflow_contract(workflow: dict[str, Any]) -> tuple[str, ...]
     missing_terminal = sorted(TERMINAL_REVIEW_EVENTS - set(events))
     if missing_terminal:
         raise ProductionBug(
-            "agent-review.yml missing CodeRabbit terminal wake-up event(s): "
-            f"{missing_terminal}"
+            f"agent-review.yml missing CodeRabbit terminal wake-up event(s): {missing_terminal}"
         )
     text = str(workflow).lower()
     if "pull_request_target" in text:

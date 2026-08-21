@@ -95,9 +95,7 @@ def test_stale_terminal_event_sha_is_skipped_before_classifier(
         classifier=[classification("ACTIONABLE")],
         codex=[CodexStep({"app/review.txt": "repaired\n"})],
     )
-    result = phase7_driver.run_review(
-        request(spec_path, git_repo, head_sha="0" * 40), services
-    )
+    result = phase7_driver.run_review(request(spec_path, git_repo, head_sha="0" * 40), services)
     assert result.status.upper() in {"SKIPPED", "REJECTED", "ESCALATED"}
     assert result.status.upper() != "READY_FOR_HUMAN"
     assert_no_codex(services)

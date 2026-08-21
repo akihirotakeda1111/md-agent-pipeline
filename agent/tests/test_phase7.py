@@ -1209,9 +1209,7 @@ def test_auto_repair_disabled_non_actionable_ready_for_human(tmp_path: Path) -> 
 
 
 def test_actionable_high_confidence_runs_repair(tmp_path: Path) -> None:
-    result, count = _class_run(
-        tmp_path, ReviewClassification.ACTIONABLE, auto_repair_enabled=True
-    )
+    result, count = _class_run(tmp_path, ReviewClassification.ACTIONABLE, auto_repair_enabled=True)
     assert result.outcome == "REVIEW_FIX_PUSHED"
     assert result.outcome != "READY_FOR_HUMAN"
     assert result.review_attempts == 1

@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 import pytest
 from agent.errors import AgentError, ErrorCategory
-from agent.github_api import GitHubClient, PULL_CREATE_TOKEN_ENV, Requester, github_client_from_env
+from agent.github_api import PULL_CREATE_TOKEN_ENV, GitHubClient, Requester, github_client_from_env
 from agent.labels import PHASE6_APPLIED_LABELS, ensure_agent_labels
 
 
@@ -252,4 +252,3 @@ def test_github_client_from_env_reads_agent_pr_pat(monkeypatch: pytest.MonkeyPat
     client.create_pull(title="t", head="feature", base="main", body="body")
     assert seen == ["Bearer env-pr-pat"]
     assert client.token == "github-token"
-

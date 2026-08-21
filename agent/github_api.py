@@ -336,9 +336,7 @@ class GitHubClient:
         )
 
     def list_issue_labels(self, issue_number: int) -> list[dict[str, Any]]:
-        return self._list_paginated(
-            f"/repos/{self.owner}/{self.repo}/issues/{issue_number}/labels"
-        )
+        return self._list_paginated(f"/repos/{self.owner}/{self.repo}/issues/{issue_number}/labels")
 
     def update_issue_comment(self, comment_id: int, body: str) -> dict[str, Any]:
         response = self.request(

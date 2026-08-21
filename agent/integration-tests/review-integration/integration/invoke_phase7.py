@@ -121,7 +121,9 @@ class _FakeGitHubClient:
         payload = self._fake.request("list_check_runs", ref=ref)
         if isinstance(payload, dict):
             runs = payload.get("check_runs")
-            return [item for item in runs if isinstance(item, dict)] if isinstance(runs, list) else []
+            return (
+                [item for item in runs if isinstance(item, dict)] if isinstance(runs, list) else []
+            )
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)]
         return []

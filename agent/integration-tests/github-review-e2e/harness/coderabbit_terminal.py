@@ -21,9 +21,7 @@ KIND_IN_PROGRESS = "IN_PROGRESS"
 KIND_NONE = "NONE"
 
 CHECK_SKIPPED_CONCLUSIONS = frozenset({"skipped", "cancelled", "neutral"})
-CHECK_FAILED_CONCLUSIONS = frozenset(
-    {"failure", "timed_out", "action_required", "stale", "error"}
-)
+CHECK_FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "action_required", "stale", "error"})
 CHECK_ACTIVE_STATUSES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 STATUS_FAILED_STATES = frozenset({"failure", "error"})
 STATUS_DESC_COMPLETED = "review completed"

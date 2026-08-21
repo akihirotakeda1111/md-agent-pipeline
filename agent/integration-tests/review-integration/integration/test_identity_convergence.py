@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from .common import (
+    coderabbit_completed,
     current_feedback,
     github_responses,
     processed_record,
     request,
-    coderabbit_completed,
 )
 from .harness.adapters import require_status
 from .harness.fake_classifier import classification

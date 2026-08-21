@@ -209,9 +209,7 @@ def _run_review(
         client, pull_number, spec, track_author=cfg.review.track_author
     )
     terminal = collect_coderabbit_terminal(client, head_sha_expected, cfg.coderabbit)
-    sticky = _sticky_terminal_result(
-        client, spec, pull_number, track, head_sha_expected, terminal
-    )
+    sticky = _sticky_terminal_result(client, spec, pull_number, track, head_sha_expected, terminal)
     if sticky is not None:
         return sticky
     if terminal.is_escalating():
@@ -227,9 +225,7 @@ def _run_review(
         )
     if not terminal.is_completed():
         apply_status_label(client, pull_number, "agent:review")
-        return _in_review(
-            spec, pull_number, track, _waiting_for_coderabbit_message(terminal)
-        )
+        return _in_review(spec, pull_number, track, _waiting_for_coderabbit_message(terminal))
     apply_status_label(client, pull_number, "agent:review")
     items = collect_review_feedback(client, pull_number, actor=cfg.coderabbit.actor)
     emit(

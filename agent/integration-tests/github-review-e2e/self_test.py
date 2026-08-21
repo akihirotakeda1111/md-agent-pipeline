@@ -10,9 +10,7 @@ import unittest
 from pathlib import Path
 
 if "yaml" not in sys.modules:
-    sys.modules["yaml"] = types.SimpleNamespace(
-        safe_load=json.loads, YAMLError=ValueError
-    )
+    sys.modules["yaml"] = types.SimpleNamespace(safe_load=json.loads, YAMLError=ValueError)
 
 import run as runner
 from harness.assertions import (
@@ -39,7 +37,6 @@ from harness.coderabbit_terminal import (
 )
 from harness.git import GitRepository
 from harness.github import (
-    GitHub,
     CANDIDATE_OTHER_PR,
     CANDIDATE_PREPARE_FAILED,
     CANDIDATE_PREPARE_OUTPUT_UNAVAILABLE,
@@ -47,16 +44,17 @@ from harness.github import (
     CANDIDATE_REVIEW_EXECUTED,
     CANDIDATE_REVIEW_PENDING,
     CANDIDATE_STALE_HEAD,
+    GitHub,
     candidate_evidence_row,
     choose_unseen_review_run,
     classify_scenario_a_timeout,
     classify_terminal_wake_candidate,
     completed_review_run_for_terminal,
+    log_line_message,
     new_terminal_wake_runs,
     parse_prepare_gate_from_log,
     prepare_binds_to_target_pr,
     raise_if_prepare_fault,
-    log_line_message,
 )
 from harness.models import (
     E2EBug,
@@ -112,9 +110,7 @@ class HarnessTests(unittest.TestCase):
 
     def test_github_style_filters_handle_include_exclude_order(self) -> None:
         self.assertTrue(matches_filters("e2e/phase7-id", ["e2e/**"], None))
-        self.assertFalse(
-            matches_filters("e2e/private/id", ["e2e/**", "!e2e/private/**"], None)
-        )
+        self.assertFalse(matches_filters("e2e/private/id", ["e2e/**", "!e2e/private/**"], None))
         self.assertTrue(
             matches_filters("specs/tasks/_e2e-phase7-id.md", ["specs/tasks/**/*.md"], None)
         )
@@ -243,9 +239,7 @@ class HarnessTests(unittest.TestCase):
             "success",
             {"Parse spec": "success", "Execute task": "success", "Deliver commit": "success"},
         )
-        assert_execute_run(
-            execute, execute_workflow, self.scenario, "a" * 40, "push"
-        )
+        assert_execute_run(execute, execute_workflow, self.scenario, "a" * 40, "push")
         body = "\n".join(
             [
                 f"<!-- agent-work-unit: {self.scenario.task_id} -->",
@@ -522,7 +516,9 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(json.loads(saved.read_text())["scenario_id"], report["scenario_id"])
 
     def test_harness_has_no_fake_or_production_policy_implementation(self) -> None:
-        sources = inspect.getsource(runner) + inspect.getsource(GitHub) + inspect.getsource(GitRepository)
+        sources = (
+            inspect.getsource(runner) + inspect.getsource(GitHub) + inspect.getsource(GitRepository)
+        )
         for forbidden in ("FakeGitHub", "FakeCodex", "SemanticClassifier", "PolicyEngine"):
             self.assertNotIn(forbidden, sources)
         self.assertNotIn("gh secret", sources.lower())
@@ -580,9 +576,7 @@ class HarnessTests(unittest.TestCase):
             "head_sha": pr_head,
             "reason": "ok",
         }
-        self.assertTrue(
-            prepare_binds_to_target_pr(prepare, pr_number=19, head_sha=pr_head)
-        )
+        self.assertTrue(prepare_binds_to_target_pr(prepare, pr_number=19, head_sha=pr_head))
         self.assertFalse(
             prepare_binds_to_target_pr(
                 {"should_review": True, "pull_number": 19, "head_sha": default_branch},
@@ -742,8 +736,7 @@ class HarnessTests(unittest.TestCase):
             for index, line in enumerate(pretty.splitlines())
         )
         compact_log = (
-            "Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000000Z "
-            + compact
+            "Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000000Z " + compact
         )
         pretty_gate = parse_prepare_gate_from_log(pretty_log)
         compact_gate = parse_prepare_gate_from_log(compact_log)
@@ -752,7 +745,9 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(pretty_gate["head_sha"], head)
         self.assertEqual(pretty_gate["reason"], "ok")
         self.assertEqual(pretty_gate, compact_gate)
-        self.assertIsNone(parse_prepare_gate_from_log("Prepare review\tGate\t2026-08-20T10:00:00Z not json"))
+        self.assertIsNone(
+            parse_prepare_gate_from_log("Prepare review\tGate\t2026-08-20T10:00:00Z not json")
+        )
         continuation = log_line_message(
             'Prepare review\tGate CodeRabbit event\t2026-08-20T10:00:00.0000001Z   "ok": true,'
         )
@@ -1186,9 +1181,7 @@ class HarnessTests(unittest.TestCase):
             unprocessed_feedback=False,
         )
         self.assertEqual(skipped_as_ready.evidence["failure_kind"], "SKIPPED_TREATED_AS_COMPLETED")
-        self.assertIsNone(
-            production_terminal_outcome(ready, success_run, current_head=current)
-        )
+        self.assertIsNone(production_terminal_outcome(ready, success_run, current_head=current))
         self.assertEqual(
             production_terminal_outcome(ready, ready_complete, current_head=current),
             "READY_FOR_HUMAN",

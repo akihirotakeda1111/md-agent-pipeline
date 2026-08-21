@@ -46,8 +46,7 @@ Add one small, dependency-free Python utility at `{{GENERATED_FILE}}`.
 Create `{{GENERATED_FILE}}` with a function:
 
 ```python
-def normalize_csv(value: str) -> tuple[str, ...]:
-    ...
+def normalize_csv(value: str) -> tuple[str, ...]: ...
 ```
 
 The function must split on commas, trim surrounding whitespace, discard empty items,
