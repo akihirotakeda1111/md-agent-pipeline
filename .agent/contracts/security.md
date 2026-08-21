@@ -17,6 +17,7 @@ Codex subprocessに不要なcredentialを渡してはいけない。
 原則としてCodexへ渡さないもの:
 
 - GitHub write token
+- PR create PAT (`AGENT_PR_PAT`)
 - production AWS credentials
 - production DB credentials
 - deployment credentials
@@ -24,6 +25,39 @@ Codex subprocessに不要なcredentialを渡してはいけない。
 - unrelated repository secrets
 
 GitHub write authorityはOrchestrator側だけに保持する。
+
+### PR Create Credential Isolation
+
+CodeRabbit auto review は `github-actions[bot]` が author の PR では発火しない。
+そのため Pull Request 作成だけを fine-grained PAT（Actions Secret `AGENT_PR_PAT`）で行う。
+
+原則:
+
+```text
+GitHub Actions Secret AGENT_PR_PAT
+        ↓
+deliver job / deliver.py
+        │
+        └─ GitHubClient.create_pull() のみ
+```
+
+次には渡してはいけない:
+
+- Codex subprocess
+- Review Classifier
+- git commit / git push
+- 既存 PR 検索・reconciliation
+- label / comment / tracking
+- execute job / review job / parse-spec
+- その他の GitHub API 操作
+
+`AGENT_PR_PAT` が無いときの create_pull は fail closed（`MISSING_AGENT_PR_PAT`）。
+`GITHUB_TOKEN` への fallback はしない。commit / push は `GITHUB_TOKEN` のみ。
+
+PAT 所有者を PR author にすることで CodeRabbit auto review が発火する。
+PAT による `pull_request` event は Actions workflow を起こし得るが、
+`agent-execute.yml` は `pull_request` を購読せず、push も `GITHUB_TOKEN` のため再帰しない。
+`agent-review.yml` は CodeRabbit の terminal check/status だけを購読する。
 
 ### Codex API Credential Isolation
 

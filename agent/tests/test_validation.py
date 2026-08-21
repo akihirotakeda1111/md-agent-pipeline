@@ -107,11 +107,13 @@ def test_default_validation_env_keeps_path_and_strips_secrets(
 ) -> None:
     monkeypatch.setenv("PATH", os.environ.get("PATH", "C:\\Windows\\System32"))
     monkeypatch.setenv("GITHUB_TOKEN", "secret-token")
+    monkeypatch.setenv("AGENT_PR_PAT", "pr-create-token")
     monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
     monkeypatch.setenv("CODEX_API_KEY", "codex-secret")
     env = build_validation_env()
     assert "PATH" in env
     assert "GITHUB_TOKEN" not in env
+    assert "AGENT_PR_PAT" not in env
     assert "OPENAI_API_KEY" not in env
     assert "CODEX_API_KEY" not in env
 

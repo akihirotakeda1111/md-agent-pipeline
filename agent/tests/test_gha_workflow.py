@@ -95,6 +95,7 @@ def test_checkout_never_persists_credentials() -> None:
 def test_codex_secret_is_not_globally_exposed() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert text.count("secrets.CODEX_API_KEY") == 1
+    assert text.count("secrets.AGENT_PR_PAT") == 1
     payload, _ = _load()
     assert "env" not in payload
     parse_job = payload["jobs"]["parse-spec"]
@@ -164,8 +165,11 @@ def test_deliver_job_uses_write_token_without_codex() -> None:
         step for step in deliver["steps"] if "deliver.py" in str(step.get("run", ""))
     )
     assert run_deliver["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    assert run_deliver["env"]["AGENT_PR_PAT"] == "${{ secrets.AGENT_PR_PAT }}"
     assert "CODEX_API_KEY" not in yaml.safe_dump(run_deliver)
     assert payload["jobs"]["execute"]["steps"][-1]["uses"] == "actions/upload-artifact@v7"
+    assert "AGENT_PR_PAT" not in yaml.safe_dump(payload["jobs"]["execute"])
+    assert "AGENT_PR_PAT" not in yaml.safe_dump(payload["jobs"]["parse-spec"])
 
 
 def test_feature_branch_push_is_not_unconditional_intake() -> None:

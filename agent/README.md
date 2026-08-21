@@ -1,8 +1,8 @@
 # Orchestrator (`agent/`)
 
-Phase 6 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair、GitHub Actions、Commit / Push / PR、Restart / GitHub Reconciliation、Observability。
+Phase 7 まで: Task Spec 解析、Execution State、公式 Codex CLI、Scope Enforcement、Validation、bounded Repair、GitHub Actions、Commit / Push / PR、Restart / GitHub Reconciliation、Observability、CodeRabbit 非同期レビュー分類と bounded review repair。
 
-CodeRabbit レビューループは未実装です。
+Pull Request の merge は自動化しません。Human responsibility です。
 
 ## Modules
 
@@ -35,13 +35,19 @@ CodeRabbit レビューループは未実装です。
 | `scripts/run-work-unit.py` | 全 Task + Final Verification。Git write しない |
 | `scripts/deliver.py` | Commit / Push / PR / labels / summary |
 | `gitwrite.py` | Orchestrator の branch / commit / push（force 禁止） |
-| `github_api.py` | 公式 GitHub REST（PR / labels / issues） |
+| `github_api.py` | 公式 GitHub REST（PR / reviews / comments / labels / issues） |
 | `reconcile.py` | execute の ephemeral execution control と deliver の durable GitHub PR reconciliation。GHA 再実行は State / Git / PR を Resume に使わず最初から |
 | `delivery.py` / `workunit.py` | write job と execute report |
+| `review_prepare.py` / `review_collect.py` / `review_filter.py` | event wake-up、API 再取得、deterministic pre-filter |
+| `review_classify.py` / `review_policy.py` / `review_loop.py` | Structured Output 分類、deterministic Policy、bounded review repair |
+| `review_track.py` | PR comment 上の processed identity / review_attempts（GitHub durable。`.agent/state` は使わない） |
+| `scripts/prepare-review.py` / `scripts/run-review.py` | `agent-review.yml` の gate と review orchestrator |
 | `events.py` / `summary.py` / `notify.py` | JSONL events、job summary、escalation notice |
-| `schemas/` | `task-spec.schema.json` / `execution-state.schema.json` |
-| `prompts/implementation.md` / `prompts/repair.md` | Codex 向け contract |
+| `schemas/` | `task-spec.schema.json` / `execution-state.schema.json` / `review-classification.schema.json` |
+| `prompts/implementation.md` / `prompts/repair.md` / `prompts/review-repair.md` / `prompts/review-classify.md` | Codex および classifier 向け contract |
 | `tests/` | unit tests |
+
+Real GitHub Phase 7 E2E は `agent/integration-tests/github-review-e2e/`。Fake 結合は `agent/integration-tests/review-integration/`。
 
 ## Task Spec headings
 
@@ -78,7 +84,7 @@ codex exec --sandbox workspace-write --output-last-message <file> --json --ignor
 ```
 
 - 認証は subprocess にだけ `CODEX_API_KEY` を渡す
-- Codex subprocess の env には `GITHUB_TOKEN` / `OPENAI_API_KEY` を渡さない
+- Codex subprocess の env には `GITHUB_TOKEN` / `AGENT_PR_PAT` / `OPENAI_API_KEY` を渡さない
 - GitHub Actions の `openai/codex-action` 入力 `openai-api-key` は上記の env とは別物。sandbox bootstrap 用の placeholder であり、`OPENAI_API_KEY` を Codex へ渡すことではない
 - `--full-auto` は deprecated のため使わない
 - Git commit / push / PR は Orchestrator の deliver job が行う。Codex subprocess には GitHub write token を渡さない
@@ -99,4 +105,4 @@ Codex 実行前に uncommitted change がある場合、agent 由来差分と区
 
 ## GitHub Actions
 
-`.github/workflows/agent-execute.yml` は parse-spec のあと `should_execute == true` のとき execute を開始し、execute の report artifact を deliver job が受け取ります。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は SUCCESS し execute / deliver を skip します。execute は `contents: read` と `CODEX_API_KEY` のみ、`persist-credentials: false` です。deliver は `contents: write` / `pull-requests: write` / `issues: write` を持ち、`CODEX_API_KEY` は持ちません。deliver の checkout も `persist-credentials: false` で、`git push` 時だけ Orchestrator の git サブプロセスへ HTTPS 認証を注入します。checkout は `actions/checkout@v7`、`fetch-depth: 0` です。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-work-unit.py` → artifact upload です。`.agent/state` は ephemeral runtime metadata です。GHA 再実行では Resume に使わず最初からやり直します。ローカルでは同一 workspace の実行中制御に使えます。deliver は同一 work unit の既存 PR だけを再利用し、reuse 時は patch 再適用も Final Verification 再実行もしません。reuse では `PR_CREATED` event を出しません。MVP では `.agent/state/*.json` を commit しません。Phase 6 が適用する label は `agent:ready` / `agent:escalated` / `agent:failed` です。
+`.github/workflows/agent-execute.yml` は parse-spec のあと `should_execute == true` のとき execute を開始し、execute の report artifact を deliver job が受け取ります。`valid` は Spec が parse できたかどうか、`should_execute` は execute を開始するかどうかです。Invalid Spec は parse-spec を非ゼロ終了にして workflow を FAIL します。非 base branch の push は SUCCESS し execute / deliver を skip します。execute は `contents: read` と `CODEX_API_KEY` のみ、`persist-credentials: false` です。deliver は `contents: write` / `pull-requests: write` / `issues: write` を持ち、`CODEX_API_KEY` は持ちません。PR 作成（`create_pull`）だけ Repository Secret `AGENT_PR_PAT` を使い、commit / push / reconciliation / label / comment は `GITHUB_TOKEN` です。deliver の checkout も `persist-credentials: false` で、`git push` 時だけ Orchestrator の git サブプロセスへ HTTPS 認証を注入します。checkout は `actions/checkout@v7`、`fetch-depth: 0` です。execute は `autonomous-agent-<task_id>` の job-level concurrency（`cancel-in-progress: false`）を使います。同一 `task_id` は実行完了まで再 push しない運用です。`queue: max` は使いません。execute の setup は checkout → Python / Node → 依存 install → `openai/codex-action@v1`（prompt なしの sandbox bootstrap）→ `run-work-unit.py` → artifact upload です。`.agent/state` は ephemeral runtime metadata です。GHA 再実行では Resume に使わず最初からやり直します。ローカルでは同一 workspace の実行中制御に使えます。deliver は同一 work unit の既存 PR だけを再利用し、reuse 時は patch 再適用も Final Verification 再実行もしません。reuse では `PR_CREATED` event を出しません。MVP では `.agent/state/*.json` を commit しません。Phase 6 が適用する label は `agent:ready` / `agent:escalated` / `agent:failed` です。Phase 7 の `agent-review.yml` は CodeRabbit の `check_run` completed / commit `status` で起動し、payload は wake-up だけに使い、GitHub API から PR / review / comment を再取得します。コメント系 event と人間の `@coderabbitai full review` では起動しません。execute workflow 内で CodeRabbit 完了を待ちません。Classifier は Structured Output の分類だけを行い、最終 action は deterministic Policy が決めます。processed identity と `review_attempts` は PR 上の tracking comment に保存し、`.agent/state` を Resume には使いません。

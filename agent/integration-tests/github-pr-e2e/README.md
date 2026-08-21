@@ -102,7 +102,7 @@ Taskは専用text fileを1つ作成するだけです。Scopeはその1 pathだ�
 7. workflow、execute job、deliver jobのsuccessを確認
 8. target branch、delivery commit、changed fileを実GitHub APIで確認
 9. open PRが正確に1件であることを確認
-10. head/base、work-unit marker、PR sections、`agent:ready`を確認
+10. head/base、work-unit marker、PR sections、`agent:review`を確認
 
 Delivery head commitとPR差分はgenerated fileだけを含む必要があります。Task Specはtemporary base上にあるためPR差分には出ません。
 
@@ -159,12 +159,12 @@ Harnessを実行する`gh` credentialには、対象repositoryについて次が
 - Pull Request read/close
 - feature branch cleanup
 
-Production workflowは既存`GITHUB_TOKEN` permissionsと既存`CODEX_API_KEY` secretを使用します。Harnessは`CODEX_API_KEY`を読み取り・受け渡し・保存しません。
+Production workflowは既存`GITHUB_TOKEN` permissions、既存`CODEX_API_KEY` secret、および PR 作成専用の `AGENT_PR_PAT` secretを使用します。Harnessはこれらのsecretを読み取り・受け渡し・保存しません。
 
 repository側では既存Phase 5/6 Manual Setupが完了している必要があります。
 
 - Production secret `CODEX_API_KEY`
-- GitHub ActionsからのPull Request作成許可
+- Production secret `AGENT_PR_PAT`（deliver の `create_pull()` のみ。PR author は PAT 所有者）
 - Production execute/deliver job permissions
 - Production workflowがactive
 

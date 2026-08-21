@@ -12,6 +12,9 @@
 # Write authority isolation:
 # - execute has contents: read and the Codex API secret. persist-credentials: false.
 # - deliver has contents/pull-requests/issues write and GITHUB_TOKEN. No CODEX_API_KEY.
+# - Pull Request creation uses AGENT_PR_PAT only (create_pull). Commit, push,
+#   reconciliation, labels, comments, and other GitHub API calls keep GITHUB_TOKEN.
+# - AGENT_PR_PAT is never passed to Codex, the Review Classifier, or git.
 # - Both jobs use persist-credentials: false so Final Verification and other
 #   repository-controlled processes cannot reach stored git write credentials.
 # - Deliver injects HTTPS auth into the Orchestrator git subprocess only.
@@ -217,6 +220,7 @@ jobs:
       - name: Commit, push, and open pull request
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          AGENT_PR_PAT: ${{ secrets.AGENT_PR_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_API_URL: ${{ github.api_url }}
         run: python agent/scripts/deliver.py --spec "${{ needs.parse-spec.outputs.spec_path }}" --report-dir "${{ runner.temp }}/agent-report"

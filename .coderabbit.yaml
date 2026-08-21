@@ -1,0 +1,45 @@
+# Official CodeRabbit configuration for the Phase 7 review loop.
+# Docs: https://docs.coderabbit.ai/configuration/auto-review
+# Docs: https://docs.coderabbit.ai/reference/configuration
+# Docs: https://docs.coderabbit.ai/finishing-touches/autofix
+#
+# Phase 6 opens a ready (non-draft) PR. CodeRabbit is the review source only.
+# Fixes go through Classifier → Policy → Codex, never CodeRabbit Autofix.
+# Do not rewrite the orchestrator PR body (work-unit marker lives there).
+reviews:
+  request_changes_workflow: false
+  high_level_summary: false
+  high_level_summary_in_walkthrough: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # Pause after N reviewed commits since the last pause. 0 disables the pause
+    # entirely; MVP keeps a bound. Must stay >= 1 (initial review) +
+    # review_attempt_limit (repair pushes). Official default 5 covers 1 + 3.
+    auto_pause_after_reviewed_commits: 5
+    # Orchestrator create_pull does not set draft; GitHub default is ready.
+    drafts: false
+    # Official: empty list is default-branch only; extra patterns extend it.
+    # e2e/phase7-.* is the isolated Phase 7 Real GitHub E2E base.
+    base_branches:
+      - "^main$"
+      - "e2e/phase7-.*"
+  review_status: true
+  review_progress: true
+  # Explicit for dual-transport observation. review_progress publishes Checks;
+  # commit_status requests the legacy commit-status mirror so Real E2E can
+  # record whether GitHub `status` events actually arrive.
+  commit_status: true
+  finishing_touches:
+    autofix:
+      enabled: false
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false

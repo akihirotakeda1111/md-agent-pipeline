@@ -1,0 +1,189 @@
+# Asynchronous CodeRabbit review. Does not wait inside agent-execute.yml.
+#
+# Wake-up is CodeRabbit terminal evidence only: check_run completed or commit
+# status. Both are kept until Real E2E records which transport is stable on
+# GITHUB_TOKEN SHAs. Comment events are not subscribed. Intermediate CodeRabbit
+# replies (full-review acknowledgement, summary, walkthrough, inline comments)
+# do not start this workflow. Human comments such as `@coderabbitai full review`
+# are instructions to CodeRabbit, not to this agent.
+#
+# Event payloads are wake-up signals only. prepare skips when the event SHA is
+# not the current pull.head.sha. The review job re-fetches the Pull Request,
+# Checks, commit statuses, reviews, and comments through the GitHub API, then
+# checks out pull.head.sha from that API response. Orchestrator code is loaded
+# from the repository default branch; the PR head is only the repair workspace.
+# Production terminal identity comes from that API re-fetch, not the wake-up.
+#
+# Security:
+# - pull_request_target is forbidden.
+# - Fork pull requests are skipped (API re-check in prepare).
+# - persist-credentials: false on every checkout.
+# - Classifier and Codex secrets are injected only on the orchestrator step.
+# - Codex never receives REVIEW_CLASSIFIER_API_KEY, GITHUB_TOKEN, or AGENT_PR_PAT.
+# - Merge is never performed.
+# - Repair never runs against the default branch or a pull_request merge SHA.
+#
+# Concurrency:
+# - No workflow-level group. A parent workflow lock that matches the review
+#   job group deadlocks queued runs (the job waits for the workflow, the
+#   workflow waits for the job).
+# - prepare is read-only and is not serialized. Non-CodeRabbit terminal events
+#   skip there and never take the review lock.
+# - review job serializes by the API pull_number from prepare.
+#   cancel-in-progress: false queues the next review. A cancelled sibling
+#   does not prevent the remaining run from re-fetching current feedback.
+#
+# Codex:
+# - openai/codex-action is sandbox bootstrap only. It does not receive the
+#   review prompt. Repair still runs Review Orchestrator → Codex Runner →
+#   `codex exec`. allow-bot-users is the configured CodeRabbit actor from
+#   agent/config.json via prepare; allow-bots is never true.
+#
+# Permissions (GITHUB_TOKEN, least privilege):
+# - workflow default: contents: read (checkout of the trusted default branch).
+# - prepare (read-only gate): contents: read (Contents API Task Spec at HEAD),
+#   pull-requests: read (get pull, list pulls for a commit SHA). Does not call
+#   Checks or Statuses APIs and does not write issues/comments/labels.
+# - review: contents: write (repair push), pull-requests: write (reviews and
+#   review comments), issues: write (issue comments and exclusive labels),
+#   checks: read (GET /commits/{sha}/check-runs), statuses: read
+#   (GET /commits/{sha}/statuses). contents write does not cover either.
+#   checks: write and statuses: write are forbidden.
+# - Codex subprocess never receives GITHUB_TOKEN or AGENT_PR_PAT.
+#
+# Official references:
+# - https://github.com/openai/codex-action
+# - https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows
+# - https://docs.github.com/en/webhooks/webhook-events-and-payloads#check_run
+# - https://docs.github.com/en/webhooks/webhook-events-and-payloads#status
+# - https://docs.github.com/en/rest/checks/runs
+# - https://docs.github.com/en/rest/commits/statuses
+# - https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps
+# - https://docs.github.com/en/rest/pulls/reviews
+# - https://docs.github.com/en/rest/pulls/comments
+# - https://docs.github.com/en/rest/issues/comments
+# - https://github.com/actions/checkout
+# - https://developers.openai.com/api/docs/guides/structured-outputs
+
+name: Agent Review
+
+on:
+  # CodeRabbit review_progress uses check runs; commit_status uses statuses.
+  # Pending statuses are skipped in the prepare job if.
+  check_run:
+    types: [completed]
+  status:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare review
+    if: ${{ (github.event_name == 'check_run' && github.event.check_run.status == 'completed') || (github.event_name == 'status' && github.event.state != 'pending') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_review: ${{ steps.gate.outputs.should_review }}
+      pull_number: ${{ steps.gate.outputs.pull_number }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+      spec_id: ${{ steps.gate.outputs.spec_id }}
+      spec_path: ${{ steps.gate.outputs.spec_path }}
+      reason: ${{ steps.gate.outputs.reason }}
+      coderabbit_actor: ${{ steps.gate.outputs.coderabbit_actor }}
+    steps:
+      - name: Checkout trusted orchestrator
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install orchestrator
+        run: python -m pip install -e .
+
+      - name: Gate CodeRabbit event
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python agent/scripts/prepare-review.py
+
+  review:
+    name: Review and repair
+    needs: [prepare]
+    if: ${{ needs.prepare.outputs.should_review == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ needs.prepare.outputs.pull_number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: read
+      statuses: read
+    steps:
+      - name: Checkout trusted orchestrator
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: _trusted
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Isolate trusted orchestrator from the repair workspace
+        run: mv _trusted "${{ runner.temp }}/orchestrator"
+
+      - name: Install trusted orchestrator
+        run: python -m pip install -e "${{ runner.temp }}/orchestrator"
+
+      - name: Checkout pull head workspace
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pinned Codex CLI
+        id: codex-cli
+        run: |
+          PKG=$(python -c "from agent.config import load_config; c=load_config(); print(f'{c.codex.package}@{c.codex.version}')")
+          VER=$(python -c "from agent.config import load_config; print(load_config().codex.version)")
+          npm install -g "$PKG"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap Codex sandbox
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: unused-bootstrap-placeholder
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-version: ${{ steps.codex-cli.outputs.version }}
+          allow-bot-users: ${{ needs.prepare.outputs.coderabbit_actor }}
+
+      - name: Run review orchestrator
+        env:
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          REVIEW_CLASSIFIER_API_KEY: ${{ secrets.REVIEW_CLASSIFIER_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: python "${{ runner.temp }}/orchestrator/agent/scripts/run-review.py" --repo-root "${{ github.workspace }}" --pull-number "${{ needs.prepare.outputs.pull_number }}" --head-sha "${{ needs.prepare.outputs.head_sha }}" --spec "${{ needs.prepare.outputs.spec_path }}"

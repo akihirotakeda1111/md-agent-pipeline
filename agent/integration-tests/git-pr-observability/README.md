@@ -56,7 +56,7 @@ report/Spec 照合 -> digest -> GitHub PR reconciliation -> base/clean
 -> commit -> push -> Pull Request
 ```
 
-workflow YAML は構造解析のみです。execute は `contents: read` と `CODEX_API_KEY`、deliver は GitHub write 権限で `CODEX_API_KEY` なし。checkout は両 job とも `persist-credentials: false` です。push 認証は Orchestrator の git サブプロセスへ限定注入します。
+workflow YAML は構造解析のみです。execute は `contents: read` と `CODEX_API_KEY`、deliver は GitHub write 権限で `CODEX_API_KEY` なし。`AGENT_PR_PAT` は deliver の `create_pull` のみ。checkout は両 job とも `persist-credentials: false` です。push 認証は Orchestrator の git サブプロセスへ限定注入します。
 
 ## Cases
 
@@ -70,7 +70,7 @@ workflow YAML は構造解析のみです。execute は `contents: read` と `CO
 | 24〜28 | reconciliation | 同一 work unit PR の reuse、不正 marker / head / base は reuse しない |
 | 29〜35 | failure / notification | FAILED / ESCALATED、Issue or PR comment、label、mention |
 | 36〜40 | isolation | execute に GitHub write なし、deliver に Codex 秘密なし |
-| W01〜W05 | workflow | permissions、`CODEX_API_KEY` 配置、empty `GITHUB_TOKEN`、persist-credentials |
+| W01〜W05 | workflow | permissions、`CODEX_API_KEY` 配置、empty `GITHUB_TOKEN`、`AGENT_PR_PAT` は deliver のみ、persist-credentials |
 | F01〜F02 | failure flow | 本番 execute→deliver で通知・label・Job Summary まで到達 |
 | O01〜O03 | observability | 必須イベントの部分順序、reuse で delivery validation / PR_CREATED なし、Repair Attempts 累積 |
 
@@ -148,7 +148,7 @@ Fake は成功判定をしません。Validation 失敗は実 Production validat
 - 一時 Git repository はケースごとに作り、リポジトリ本体は変更しない。
 - Git safety は argv ではなく実 Git 状態から検証する。
 - credential isolation の主証拠は workflow YAML（W01〜W05）と execute が GitHub write を呼ばないこと。
-- execute 相当の env に GitHub write token を残さず、deliver 相当の env に `CODEX_API_KEY` を残さない。Adapter は job 終了後に process env を戻す。
+- execute 相当の env に GitHub write token と `AGENT_PR_PAT` を残さず、deliver 相当の env に `CODEX_API_KEY` を残さない。Adapter は job 終了後に process env を戻す。
 - FAILED / ESCALATED の機械可読 code は `DeliveryResult.code`。message 文字列の parse で復元しない。
 - Real Codex API key、本番 GitHub credential、外部 GitHub access は不要。Fake 値以外の secret を渡さない。
 

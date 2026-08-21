@@ -109,10 +109,13 @@ def test_push_injects_https_auth_without_github_token_in_git_env(
 
     monkeypatch.setattr("agent.gitwrite.subprocess.run", fake_run)
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_push_token")
+    monkeypatch.setenv("AGENT_PR_PAT", "github_pat_must_not_push")
     push_branch(repo, "feature/demo")
     env = captured["env"]
     assert isinstance(env, dict)
     assert "GITHUB_TOKEN" not in env
+    assert "AGENT_PR_PAT" not in env
+    assert "github_pat_must_not_push" not in str(env)
     assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
     encoded = base64.b64encode(b"x-access-token:ghs_test_push_token").decode("ascii")
     assert env["GIT_CONFIG_VALUE_0"] == f"AUTHORIZATION: basic {encoded}"
@@ -136,8 +139,10 @@ def test_commit_does_not_receive_push_auth(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr("agent.gitwrite.subprocess.run", fake_run)
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_push_token")
+    monkeypatch.setenv("AGENT_PR_PAT", "github_pat_must_not_commit")
     commit_paths(repo, ["src/app.py"], "feat(demo): complete task-1")
     assert captured
     for env in captured:
         assert "GITHUB_TOKEN" not in env
+        assert "AGENT_PR_PAT" not in env
         assert "GIT_CONFIG_KEY_0" not in env

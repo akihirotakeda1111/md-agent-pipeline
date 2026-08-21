@@ -385,6 +385,80 @@ def run_deliver_cli(argv: Sequence[str] | None = None) -> int:
         return _exit_for_error(exc)
 
 
+def run_prepare_review_cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Gate a CodeRabbit GitHub event before the review job"
+    )
+    _repo_root_arg(parser)
+    parser.add_argument("--event-path", type=Path, default=None)
+    parser.add_argument("--repository", default=None)
+    parser.add_argument(
+        "--github-output",
+        type=Path,
+        default=None,
+        help="Append GITHUB_OUTPUT name=value lines",
+    )
+    args = parser.parse_args(argv)
+    try:
+        event_path = args.event_path
+        if event_path is None:
+            raw_path = os.environ.get("GITHUB_EVENT_PATH")
+            if not raw_path:
+                raise AgentError.invalid_input("GITHUB_EVENT_PATH is required")
+            event_path = Path(raw_path)
+        from agent.review_prepare import load_event_payload, prepare_review
+
+        repository = _env_or_arg(args.repository, "GITHUB_REPOSITORY")
+        result = prepare_review(
+            repo_root=args.repo_root,
+            event_payload=load_event_payload(event_path),
+            repository=repository,
+        )
+        output_file = args.github_output
+        if output_file is None and "GITHUB_OUTPUT" in os.environ:
+            output_file = Path(os.environ["GITHUB_OUTPUT"])
+        if output_file is not None:
+            write_github_output(output_file, result.to_output_map())
+        _print_json(result.to_json_dict())
+        return EXIT_OK
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
+def run_review_cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Classify CodeRabbit feedback and optionally run a bounded review repair"
+    )
+    parser.add_argument("--pull-number", type=int, required=True)
+    parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--spec", type=Path, default=None)
+    _repo_root_arg(parser)
+    args = parser.parse_args(argv)
+    try:
+        from agent.review_loop import run_review
+
+        spec_path = None if args.spec is None else str(args.spec)
+        result = run_review(
+            repo_root=args.repo_root,
+            pull_number=args.pull_number,
+            head_sha_expected=args.head_sha,
+            spec_path=spec_path,
+        )
+        _print_json(
+            {
+                "ok": result.outcome in {"READY_FOR_HUMAN", "REVIEW_FIX_PUSHED", "IN_REVIEW"},
+                **result.to_json_dict(),
+            }
+        )
+        if result.outcome in {"READY_FOR_HUMAN", "REVIEW_FIX_PUSHED", "IN_REVIEW"}:
+            return EXIT_OK
+        if result.outcome == "FAILED":
+            return EXIT_ENVIRONMENT
+        return EXIT_POLICY
+    except Exception as exc:
+        return _exit_for_error(exc)
+
+
 def _parse_set_json(raw: str | None) -> dict[str, Any]:
     if raw is None:
         return {}

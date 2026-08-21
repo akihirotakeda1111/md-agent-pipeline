@@ -69,6 +69,7 @@ class PullRequestEvidence:
     head_sha: str
     body: str
     labels: tuple[str, ...]
+    author: str = ""
 
 
 def report_skeleton(scenario: Scenario) -> dict[str, Any]:

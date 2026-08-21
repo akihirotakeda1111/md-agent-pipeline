@@ -48,7 +48,11 @@ class ValidationConfig:
 
 @dataclass(frozen=True)
 class ReviewConfig:
-    classifier_model: str | None
+    provider: str
+    classifier_model: str
+    confidence_threshold: float
+    api_key_env: str
+    track_author: str
     max_comments_per_run: int | None
 
 
@@ -62,6 +66,8 @@ class NotificationConfig:
 @dataclass(frozen=True)
 class CodeRabbitConfig:
     actor: str
+    check_app_slug: str
+    status_context: str
 
 
 @dataclass(frozen=True)
@@ -150,7 +156,22 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
             ),
         ),
         review=ReviewConfig(
-            classifier_model=_optional_str(review, "classifier_model", "review"),
+            provider=_optional_non_empty_str(review, "provider", "review", default="openai"),
+            classifier_model=_optional_non_empty_str(
+                review,
+                "classifier_model",
+                "review",
+                default="gpt-5.4-nano-2026-03-17",
+            ),
+            confidence_threshold=_optional_unit_float(
+                review, "confidence_threshold", "review", default=0.80
+            ),
+            api_key_env=_optional_non_empty_str(
+                review, "api_key_env", "review", default="REVIEW_CLASSIFIER_API_KEY"
+            ),
+            track_author=_optional_non_empty_str(
+                review, "track_author", "review", default="github-actions[bot]"
+            ),
             max_comments_per_run=_optional_int(review, "max_comments_per_run", "review"),
         ),
         notification=NotificationConfig(
@@ -161,6 +182,12 @@ def _parse_config(payload: dict[str, Any]) -> AgentConfig:
         coderabbit=CodeRabbitConfig(
             actor=_optional_non_empty_str(
                 coderabbit, "actor", "coderabbit", default="coderabbitai[bot]"
+            ),
+            check_app_slug=_optional_non_empty_str(
+                coderabbit, "check_app_slug", "coderabbit", default="coderabbitai"
+            ),
+            status_context=_optional_non_empty_str(
+                coderabbit, "status_context", "coderabbit", default="CodeRabbit"
             ),
         ),
     )
@@ -234,6 +261,18 @@ def _optional_non_negative_int(obj: dict[str, Any], key: str, prefix: str, *, de
     if value < 0:
         raise AgentError.invalid_input(f"{prefix}.{key} must be >= 0")
     return value
+
+
+def _optional_unit_float(obj: dict[str, Any], key: str, prefix: str, *, default: float) -> float:
+    if key not in obj or obj[key] is None:
+        return default
+    value = obj[key]
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise AgentError.invalid_input(f"{prefix}.{key} must be a number")
+    number = float(value)
+    if number < 0 or number > 1:
+        raise AgentError.invalid_input(f"{prefix}.{key} must be between 0 and 1")
+    return number
 
 
 def _optional_bool(obj: dict[str, Any], key: str, prefix: str, *, default: bool) -> bool:

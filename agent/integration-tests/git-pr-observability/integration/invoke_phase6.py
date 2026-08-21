@@ -44,6 +44,7 @@ _JOB_CREDENTIALS = (
     "GITHUB_TOKEN",
     "GH_TOKEN",
     "GITHUB_PAT",
+    "AGENT_PR_PAT",
 )
 
 
@@ -84,6 +85,9 @@ class _FakeGitHubClient:
 
     def add_issue_labels(self, issue_number: int, labels: list[str]) -> None:
         self._fake.set_labels(issue_number=issue_number, labels=labels)
+
+    def remove_issue_label(self, issue_number: int, name: str) -> None:
+        self._fake.request("remove_label", issue_number=issue_number, name=name)
 
     def create_issue(
         self, *, title: str, body: str, labels: list[str] | None = None
@@ -155,6 +159,7 @@ def _execute_job_env(environment: dict[str, str]) -> dict[str, str]:
     env["GITHUB_TOKEN"] = ""
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_PAT", None)
+    env.pop("AGENT_PR_PAT", None)
     return env
 
 

@@ -58,7 +58,7 @@ def delivery_request(
         spec_path=spec_path,
         repo_root=repo.root,
         artifacts=artifacts,
-        environment={"GITHUB_TOKEN": "write-test-token", "GITHUB_REPOSITORY": "example/phase6"},
+        environment={"GITHUB_TOKEN": "write-test-token", "AGENT_PR_PAT": "pr-create-test-token", "GITHUB_REPOSITORY": "example/phase6"},
         notification_mention=mention,
     )
 

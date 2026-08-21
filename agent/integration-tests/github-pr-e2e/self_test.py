@@ -124,7 +124,8 @@ class HarnessTests(unittest.TestCase):
             self.scenario.base_branch,
             "b" * 40,
             body,
-            ("agent:ready",),
+            ("agent:review",),
+            author="pat-owner",
         )
         assert_pr(pr1, self.scenario)
         assert_commit_files([self.scenario.generated_file], self.scenario)

@@ -179,6 +179,39 @@ def collect_failures(text: str | None = None) -> list[str]:
             "deliver must call deliver.py",
             failures,
         )
+        deliver_run = next(
+            (
+                step
+                for step in deliver_job.get("steps") or []
+                if _run_contains(step, "agent/scripts/deliver.py")
+            ),
+            None,
+        )
+        _require(isinstance(deliver_run, dict), "deliver.py step is missing", failures)
+        if isinstance(deliver_run, dict):
+            env = deliver_run.get("env") or {}
+            _require(
+                env.get("GITHUB_TOKEN") == "${{ github.token }}",
+                "deliver must keep GITHUB_TOKEN for non-create GitHub operations",
+                failures,
+            )
+            _require(
+                env.get("AGENT_PR_PAT") == "${{ secrets.AGENT_PR_PAT }}",
+                "deliver create_pull must use secrets.AGENT_PR_PAT",
+                failures,
+            )
+        if isinstance(execute_job, dict):
+            _require(
+                "AGENT_PR_PAT" not in yaml.safe_dump(execute_job),
+                "execute must not receive AGENT_PR_PAT",
+                failures,
+            )
+        if isinstance(parse_job, dict):
+            _require(
+                "AGENT_PR_PAT" not in yaml.safe_dump(parse_job),
+                "parse-spec must not receive AGENT_PR_PAT",
+                failures,
+            )
         checkout = next(
             (
                 step
