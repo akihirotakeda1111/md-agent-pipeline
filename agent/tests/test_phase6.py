@@ -1393,7 +1393,11 @@ def test_delivery_keeps_escalated_when_pr_notification_fails(
         assert diagnostic["notification_operation"] == "create_issue_comment"
         assert "agent:escalated" in github.labels.get("issue:7", {}).get("labels", "")
     if fail_label:
-        assert any(item["notification_operation"] == "apply_status_label" for item in records)
+        assert any(
+            item.get("event") == "NOTIFICATION_FAILED"
+            and item.get("notification_operation") == "apply_status_label"
+            for item in records
+        )
         assert github.comments
 
 

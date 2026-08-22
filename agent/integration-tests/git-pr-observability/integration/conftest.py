@@ -143,7 +143,12 @@ def artifact_factory(tmp_path: Path, git_repo: GitRepo):
             patch_sha256=hashlib.sha256(actual_patch).hexdigest(),
         )
         payload = report.to_json_dict()
-        payload.update(report_overrides or {})
+        overrides = dict(report_overrides or {})
+        if "branch" in overrides:
+            state_payload = dict(payload.get("state") or {})
+            state_payload["branch"] = overrides["branch"]
+            payload["state"] = state_payload
+        payload.update(overrides)
         report_path = artifacts_dir / "report.json"
         report_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         git_repo.observations.timeline.clear()
