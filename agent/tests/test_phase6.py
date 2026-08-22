@@ -70,6 +70,7 @@ def _report(**overrides: object) -> WorkUnitReport:
         completed = spec_task_ids if outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED else ()
         state = replace(new_execution_state(spec), completed_tasks=completed)
     elif (
+        # Caller-supplied state is rewritten only when completed_tasks is omitted.
         outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED
         and "completed_tasks" not in overrides
         and set(state.completed_tasks) != set(spec_task_ids)

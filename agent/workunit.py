@@ -115,6 +115,11 @@ def _as_failure_class(value: object) -> FailureClass | None:
         return None
     if isinstance(value, FailureClass):
         return value
+    if isinstance(value, StrEnum):
+        raise AgentError.invalid_input(
+            f"invalid work unit failure class: {value!r}",
+            code="INVALID_WORK_UNIT_REPORT",
+        )
     if isinstance(value, str):
         try:
             return FailureClass(value)
@@ -307,6 +312,8 @@ def _build_work_unit_report(
     skip_reason: str | None = None,
     patch_file: str = "changes.patch",
     patch_sha256: str = "",
+    branch: str | None = None,
+    validate_spec_tasks: bool = True,
 ) -> WorkUnitReport:
     final_verification_passed, validation_passed, allowed = derived_compat_booleans(outcome)
     report = WorkUnitReport(
@@ -315,7 +322,7 @@ def _build_work_unit_report(
         spec_path=spec.source_path or "",
         spec_sha256=spec.spec_sha256,
         base_sha=base_sha,
-        branch=spec.target_branch,
+        branch=spec.target_branch if branch is None else branch,
         state=state,
         completed_tasks=completed_tasks,
         changed_files=changed_files,
@@ -332,7 +339,7 @@ def _build_work_unit_report(
         patch_file=patch_file,
         patch_sha256=patch_sha256,
     )
-    validate_work_unit_report(report, spec=spec)
+    validate_work_unit_report(report, spec=spec if validate_spec_tasks else None)
     return report
 
 
@@ -397,6 +404,7 @@ def report_from_preparation_error(
     state_rel: str,
 ) -> WorkUnitReport:
     if error.code == "STATE_TAMPERED":
+        # Caller supplies new_execution_state(spec); keep spec branch and spec-task checks.
         message = f"STATE_TAMPERED: {state_rel}"
         return _build_work_unit_report(
             outcome=WorkUnitOutcome.SCOPE_VIOLATION,
@@ -437,6 +445,8 @@ def report_from_preparation_error(
         code=error.code,
         current_task=state.current_task,
         skip_reason=str(error),
+        branch=state.branch,
+        validate_spec_tasks=False,
     )
 
 

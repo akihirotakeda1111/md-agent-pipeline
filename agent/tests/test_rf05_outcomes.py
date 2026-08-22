@@ -54,6 +54,7 @@ from agent.workunit import (
     derived_compat_booleans,
     load_work_unit_report,
     load_work_unit_report_schema,
+    report_from_preparation_error,
     report_from_reconcile,
     validate_work_unit_report,
     work_unit_outcome_from_cycle,
@@ -251,6 +252,7 @@ def test_work_unit_report_state_fields_must_agree() -> None:
 
 def test_work_unit_report_rejects_unknown_duplicate_and_missing_tasks() -> None:
     spec = _spec()
+    assert len(spec.tasks) > 1
     with pytest.raises(AgentError) as exc_info:
         _report(
             outcome="FAILED",
@@ -276,6 +278,44 @@ def test_work_unit_report_rejects_unknown_duplicate_and_missing_tasks() -> None:
         validate_work_unit_report(partial, spec=spec)
     assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
     validate_work_unit_report(_report(), spec=spec)
+
+
+def test_preparation_error_report_uses_persisted_state_not_spec_tasks() -> None:
+    spec = _spec()
+    state = replace(
+        new_execution_state(spec),
+        branch="feature/wrong",
+        completed_tasks=("ghost",),
+    )
+    report = report_from_preparation_error(
+        spec,
+        base_sha="a" * 40,
+        state=state,
+        error=AgentError.escalation_required(
+            "branch mismatch",
+            code="STATE_BRANCH_MISMATCH",
+        ),
+        state_rel="state.json",
+    )
+    assert report.outcome is WorkUnitOutcome.ESCALATED
+    assert report.branch == "feature/wrong"
+    assert report.completed_tasks == ("ghost",)
+    assert report.code == "STATE_BRANCH_MISMATCH"
+    assert report.failure_class is FailureClass.ESCALATION_REQUIRED
+
+
+def test_state_tampered_preparation_report_still_validates_spec_tasks() -> None:
+    spec = _spec()
+    state = replace(new_execution_state(spec), completed_tasks=("ghost",))
+    with pytest.raises(AgentError) as exc_info:
+        report_from_preparation_error(
+            spec,
+            base_sha="a" * 40,
+            state=state,
+            error=AgentError.policy_violation("tampered", code="STATE_TAMPERED"),
+            state_rel="state.json",
+        )
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
 
 
 def test_load_work_unit_report_types_io_errors(tmp_path: Path) -> None:
