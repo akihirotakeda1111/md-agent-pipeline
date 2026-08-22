@@ -43,7 +43,9 @@ REVIEW_ESCALATED = "REVIEW_ESCALATED"
 READY_FOR_HUMAN = "READY_FOR_HUMAN"
 NOTIFICATION_FAILED_MESSAGE = "failure notification could not be published"
 _MAX_DIAGNOSTIC_VALUE = 240
-_SECRET_PATTERN = re.compile(r"(?i)(authorization\s*[:=]\s*|bearer\s+|token\s*[:=]\s*)\S+")
+_SECRET_PATTERN = re.compile(
+    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|bearer\s+|token\s*[:=]\s*)\S+"
+)
 
 
 def emit(

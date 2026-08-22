@@ -1653,18 +1653,21 @@ def test_delivery_diagnostic_emit_failure_still_returns_result(
 
 
 def test_notification_failed_event_keeps_primary_and_notification_codes() -> None:
-    from agent.events import emit_notification_failed
+    from agent.events import (
+        _MAX_DIAGNOSTIC_VALUE,
+        _bounded_diagnostic_text,
+        emit_notification_failed,
+    )
 
+    secret = "secret-token"
     record = emit_notification_failed(
         phase="delivery",
         task_id="example-task",
         primary_outcome="ESCALATED",
         primary_code="WORK_UNIT_PR_MISMATCH",
         operation="create_issue_comment",
-        error=AgentError.environment_failure(
-            "Authorization: Bearer secret-token-value",
-            code="GITHUB_API_FAILURE",
-        ),
+        error=AgentError.environment_failure("comment failed", code="GITHUB_API_FAILURE"),
+        message=f"Authorization: Bearer {secret}",
     )
     dumped = json.dumps(record)
     assert record["event"] == "NOTIFICATION_FAILED"
@@ -1673,7 +1676,12 @@ def test_notification_failed_event_keeps_primary_and_notification_codes() -> Non
     assert record["primary_code"] == "WORK_UNIT_PR_MISMATCH"
     assert record["notification_operation"] == "create_issue_comment"
     assert record["notification_error_code"] == "GITHUB_API_FAILURE"
-    assert "secret-token-value" not in dumped
+    assert secret not in dumped
+    assert secret not in record["message"]
+    assert "[redacted]" in record["message"]
+    assert _bounded_diagnostic_text(f"Bearer {secret}") == "Bearer [redacted]"
+    assert _bounded_diagnostic_text(f"token={secret}") == "token=[redacted]"
+    padded = ("n" * 200) + f" Authorization: Bearer {secret} " + ("z" * 200)
     bounded = emit_notification_failed(
         phase="delivery",
         task_id="example-task",
@@ -1681,5 +1689,9 @@ def test_notification_failed_event_keeps_primary_and_notification_codes() -> Non
         primary_code="WORK_UNIT_PR_MISMATCH",
         operation="x" * 500,
         error=AgentError.environment_failure("x", code="GITHUB_API_FAILURE"),
+        message=padded,
     )
-    assert len(str(bounded["notification_operation"])) <= 240
+    bounded_dump = json.dumps(bounded)
+    assert secret not in bounded_dump
+    assert len(bounded["message"]) <= _MAX_DIAGNOSTIC_VALUE
+    assert len(str(bounded["notification_operation"])) <= _MAX_DIAGNOSTIC_VALUE
