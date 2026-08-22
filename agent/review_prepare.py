@@ -10,14 +10,20 @@ from typing import Any
 from agent.config import AgentConfig, load_config
 from agent.errors import AgentError
 from agent.github_api import GitHubClient, github_client_from_env
-from agent.pr import is_same_work_unit_pull, parse_work_unit_marker
+from agent.pr import assert_spec_matches_marker, is_same_work_unit_pull, parse_work_unit_marker
 from agent.review_collect import head_repo_full_name, head_sha_from_pull
 from agent.review_terminal import (
     event_commit_sha,
     has_coderabbit_event_identity,
     is_terminal_wakeup_event,
 )
-from agent.spec import TaskSpec, parse_spec, parse_spec_text
+from agent.spec import (
+    TaskSpec,
+    bind_spec_identity,
+    canonicalize_spec_path,
+    parse_spec,
+    parse_spec_text,
+)
 
 
 @dataclass(frozen=True)
@@ -125,6 +131,46 @@ def find_spec_by_id(
             code="DUPLICATE_SPEC_ID",
         )
     return matches[0]
+
+
+def load_spec_from_marker_at_ref(
+    client: GitHubClient,
+    marker: dict[str, str],
+    *,
+    ref: str,
+    repo_root: Path | str,
+    spec_directory: str,
+) -> tuple[str, TaskSpec]:
+    """Load the Task Spec at marker.spec_path from current HEAD. No spec_id search."""
+    marker_path = marker.get("spec_path") or ""
+    if not marker_path or not marker.get("spec_sha256"):
+        raise AgentError.escalation_required(
+            "PR marker is missing spec_path/spec_sha256",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    canonical = canonicalize_spec_path(
+        marker_path,
+        repo_root=repo_root,
+        spec_directory=spec_directory,
+    )
+    if canonical != marker_path:
+        raise AgentError.escalation_required(
+            f"PR marker spec_path is not canonical: {marker_path!r}",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    try:
+        text = client.get_content(canonical, ref=ref)
+    except AgentError as exc:
+        if exc.code == "GITHUB_NOT_FOUND":
+            raise AgentError.escalation_required(
+                f"Task Spec not found at {canonical} ({ref})",
+                code="SPEC_NOT_FOUND",
+            ) from exc
+        raise
+    spec = parse_spec_text(text, source_path=canonical)
+    spec = bind_spec_identity(spec, repo_root=repo_root, spec_directory=spec_directory)
+    assert_spec_matches_marker(spec, marker)
+    return canonical, spec
 
 
 def find_spec_by_id_at_ref(
@@ -246,10 +292,11 @@ def prepare_review(
             head_sha=head_sha,
             reason="pull request is not an orchestrator work unit",
         )
-    spec_path, spec = find_spec_by_id_at_ref(
+    spec_path, spec = load_spec_from_marker_at_ref(
         client,
-        marker["spec_id"],
+        marker,
         ref=head_sha,
+        repo_root=repo_root,
         spec_directory=cfg.task_spec.directory,
     )
     if not is_same_work_unit_pull(spec, pull):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from agent.pr import build_work_unit_marker
+from agent.spec import bind_spec_identity, parse_spec
 
 from .common import (
     assert_no_git_write,
@@ -12,10 +14,21 @@ from .harness.adapters import require_status
 from .harness.observations import event_names
 
 
+def _same_work_unit_pull(spec_path, git_repo):
+    existing = github_fixture("existing-same-work-unit.json")
+    spec = bind_spec_identity(
+        parse_spec(spec_path),
+        repo_root=git_repo.root,
+        spec_directory="specs/tasks",
+    )
+    existing["body"] = build_work_unit_marker(spec)
+    return existing
+
+
 def test_24_25_same_work_unit_open_pr_is_reused_without_new_delivery(
     phase6_driver, spec_path, git_repo, service_factory, artifact_factory
 ):
-    existing = github_fixture("existing-same-work-unit.json")
+    existing = _same_work_unit_pull(spec_path, git_repo)
     services = service_factory(github_responses={"list_pull_requests": [[existing]]})
     before = snapshot(git_repo)
     result = phase6_driver.deliver(
@@ -78,5 +91,22 @@ def test_reuse_still_requires_report_and_patch_binding(
     )
     result = phase6_driver.deliver(delivery_request(spec_path, git_repo, artifacts), services)
     assert result.status.upper() == "ESCALATED"
+    assert_no_git_write(before, git_repo, services)
+    assert not services.github.calls("create_pull_request")
+
+
+def test_legacy_marker_without_digest_is_not_reused(
+    phase6_driver, spec_path, git_repo, service_factory, artifact_factory
+):
+    existing = github_fixture("existing-same-work-unit.json")
+    services = service_factory(github_responses={"list_pull_requests": [[existing]]})
+    before = snapshot(git_repo)
+    result = phase6_driver.deliver(
+        delivery_request(spec_path, git_repo, artifact_factory(spec_path)), services
+    )
+    assert result.status.upper() == "ESCALATED"
+    assert result.reason == "SPEC_IDENTITY_MISMATCH" or "SPEC_IDENTITY_MISMATCH" in str(
+        result.reason
+    )
     assert_no_git_write(before, git_repo, services)
     assert not services.github.calls("create_pull_request")

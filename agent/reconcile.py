@@ -16,7 +16,7 @@ from typing import Any
 from agent.config import AgentConfig
 from agent.errors import AgentError
 from agent.github_api import GitHubClient
-from agent.pr import is_same_work_unit_pull
+from agent.pr import authorize_work_unit_reuse, is_same_work_unit_pull
 from agent.spec import TaskSpec
 from agent.state import (
     ExecutionState,
@@ -115,6 +115,7 @@ def reconcile_open_pull(spec: TaskSpec, github: GitHubClient) -> OpenPullReconci
             "open pull request on the target branch is not the same work unit",
             code="WORK_UNIT_PR_MISMATCH",
         )
+    authorize_work_unit_reuse(spec, pull)
     return OpenPullReconcile("reuse", pull)
 
 

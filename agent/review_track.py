@@ -10,15 +10,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent.spec import TaskSpec
+from agent.spec import TaskSpec, work_unit_identity
 
 REVIEW_STATE_START = "<!-- md-agent-review-state"
 REVIEW_STATE_END = "-->"
-REVIEW_TRACK_SCHEMA_VERSION = 1
+REVIEW_TRACK_SCHEMA_VERSION = 2
 _KNOWN_KEYS = frozenset(
     {
         "schema_version",
         "spec_id",
+        "spec_path",
+        "spec_sha256",
         "base_branch",
         "target_branch",
         "head_sha",
@@ -30,6 +32,8 @@ _KNOWN_KEYS = frozenset(
 @dataclass(frozen=True)
 class ReviewTrack:
     spec_id: str
+    spec_path: str
+    spec_sha256: str
     base_branch: str
     target_branch: str
     review_attempts: int
@@ -41,18 +45,24 @@ class ReviewTrack:
         return set(self.processed)
 
     def matches_work_unit(self, spec: TaskSpec) -> bool:
+        identity = work_unit_identity(spec)
         return (
-            self.spec_id == spec.id
-            and self.base_branch == spec.base_branch
-            and self.target_branch == spec.target_branch
+            self.spec_id == identity.spec_id
+            and self.spec_path == identity.spec_path
+            and self.spec_sha256 == identity.spec_sha256
+            and self.base_branch == identity.base_branch
+            and self.target_branch == identity.target_branch
         )
 
 
 def empty_review_track(spec: TaskSpec) -> ReviewTrack:
+    identity = work_unit_identity(spec)
     return ReviewTrack(
-        spec_id=spec.id,
-        base_branch=spec.base_branch,
-        target_branch=spec.target_branch,
+        spec_id=identity.spec_id,
+        spec_path=identity.spec_path,
+        spec_sha256=identity.spec_sha256,
+        base_branch=identity.base_branch,
+        target_branch=identity.target_branch,
         review_attempts=0,
         processed=(),
         head_sha="",
@@ -99,9 +109,11 @@ def parse_review_track(body: str | None) -> ReviewTrack | None:
     if fields.get("schema_version") != str(REVIEW_TRACK_SCHEMA_VERSION):
         return None
     spec_id = fields.get("spec_id", "")
+    spec_path = fields.get("spec_path", "")
+    spec_sha256 = fields.get("spec_sha256", "")
     base_branch = fields.get("base_branch", "")
     target_branch = fields.get("target_branch", "")
-    if not spec_id or not base_branch or not target_branch:
+    if not spec_id or not spec_path or not spec_sha256 or not base_branch or not target_branch:
         return None
     try:
         attempts = int(fields.get("review_attempts", "0"))
@@ -111,6 +123,8 @@ def parse_review_track(body: str | None) -> ReviewTrack | None:
         return None
     return ReviewTrack(
         spec_id=spec_id,
+        spec_path=spec_path,
+        spec_sha256=spec_sha256,
         base_branch=base_branch,
         target_branch=target_branch,
         review_attempts=attempts,
@@ -125,6 +139,8 @@ def render_review_track(track: ReviewTrack) -> str:
         REVIEW_STATE_START,
         f"schema_version: {track.schema_version}",
         f"spec_id: {track.spec_id}",
+        f"spec_path: {track.spec_path}",
+        f"spec_sha256: {track.spec_sha256}",
         f"base_branch: {track.base_branch}",
         f"target_branch: {track.target_branch}",
         f"head_sha: {track.head_sha}",
@@ -153,6 +169,8 @@ def with_processed(
     attempts = track.review_attempts + 1 if increment else track.review_attempts
     return ReviewTrack(
         spec_id=track.spec_id,
+        spec_path=track.spec_path,
+        spec_sha256=track.spec_sha256,
         base_branch=track.base_branch,
         target_branch=track.target_branch,
         review_attempts=attempts,

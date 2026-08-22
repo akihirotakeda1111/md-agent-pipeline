@@ -40,7 +40,7 @@ from agent.review_types import (
     ReviewFeedback,
     ReviewPolicyAction,
 )
-from agent.spec import TaskSpec, parse_spec
+from agent.spec import TaskSpec, bind_spec_identity, parse_spec
 
 PYTHON_COMMAND = Path(sys.executable).name
 
@@ -149,7 +149,8 @@ def _spec_files(repo: Path) -> dict[str, str]:
 
 
 def _spec(repo: Path):
-    return parse_spec(repo / "specs" / "tasks" / "review-demo.md")
+    spec = parse_spec(repo / "specs" / "tasks" / "review-demo.md")
+    return bind_spec_identity(spec, repo_root=repo, spec_directory="specs/tasks")
 
 
 def _fake(repo: Path, spec) -> FakeGithub:
@@ -242,6 +243,8 @@ def _dummy_spec() -> TaskSpec:
         architecture_invariants="a",
         tasks=(),
         final_verification="v",
+        source_path="specs/tasks/review-demo.md",
+        spec_sha256="a" * 64,
     )
 
 
@@ -1443,7 +1446,7 @@ def test_tracking_comment_is_github_durable_not_agent_state() -> None:
     assert parsed is not None
     assert parsed.review_attempts == 1
     assert "a:1:t:deadbeef" in parsed.processed
-    assert parsed.schema_version == 1
+    assert parsed.schema_version == 2
     assert parsed.base_branch == "main"
     assert parsed.target_branch == "feature/review"
     assert ".agent/state" not in body

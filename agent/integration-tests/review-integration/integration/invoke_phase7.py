@@ -33,7 +33,7 @@ from agent.review_track import (
     parse_review_track,
     render_review_track,
 )
-from agent.spec import parse_spec
+from agent.spec import bind_spec_identity, parse_spec, spec_source_sha256
 
 from .common import BOT
 from .harness.adapters import ReviewRunRequest, ReviewRunResult, ServiceBundle
@@ -81,7 +81,12 @@ class _FakeGitHubClient:
     def get_pull(self, number: int) -> dict[str, Any]:
         payload = self._fake.get_pull_request(number=number)
         raw = payload if isinstance(payload, dict) else {}
-        return _production_pull(raw, repository=self._repository, requested_number=number)
+        return _production_pull(
+            raw,
+            repository=self._repository,
+            requested_number=number,
+            repo_root=self._repo_root,
+        )
 
     def get_content(self, path: str, *, ref: str) -> str:
         self._fake.request("get_content", path=path, ref=ref)
@@ -299,7 +304,11 @@ def _as_github_issue_comment(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _production_pull(
-    raw: dict[str, Any], *, repository: str, requested_number: int
+    raw: dict[str, Any],
+    *,
+    repository: str,
+    requested_number: int,
+    repo_root: Path,
 ) -> dict[str, Any]:
     pull = dict(raw)
     pull.setdefault("number", requested_number)
@@ -313,19 +322,36 @@ def _production_pull(
     pull["base"] = base
     if not str(pull.get("body") or "").strip():
         spec_id = str(pull.get("work_unit_id") or "")
+        spec_path = str(pull.get("spec_path") or "specs/tasks/phase7-integration.md")
+        spec_sha256 = str(pull.get("spec_sha256") or "")
+        if not spec_sha256:
+            spec_file = repo_root / spec_path
+            if spec_file.is_file():
+                spec_sha256 = spec_source_sha256(spec_file.read_text(encoding="utf-8"))
         pull["body"] = _marker(
             spec_id=spec_id,
+            spec_path=spec_path,
+            spec_sha256=spec_sha256,
             base_branch=str(base.get("ref") or "main"),
             target_branch=str(head.get("ref") or ""),
         )
     return pull
 
 
-def _marker(*, spec_id: str, base_branch: str, target_branch: str) -> str:
+def _marker(
+    *,
+    spec_id: str,
+    spec_path: str,
+    spec_sha256: str,
+    base_branch: str,
+    target_branch: str,
+) -> str:
     return "\n".join(
         [
             WORK_UNIT_MARKER_START,
             f"spec_id: {spec_id}",
+            f"spec_path: {spec_path}",
+            f"spec_sha256: {spec_sha256}",
             f"base_branch: {base_branch}",
             f"target_branch: {target_branch}",
             WORK_UNIT_MARKER_END,
@@ -377,6 +403,8 @@ def _seed_tracking(fake: FakeGitHub, *, spec, request: ReviewRunRequest) -> None
     base = empty_review_track(spec)
     track = ReviewTrack(
         spec_id=base.spec_id,
+        spec_path=base.spec_path,
+        spec_sha256=base.spec_sha256,
         base_branch=base.base_branch,
         target_branch=base.target_branch,
         review_attempts=request.review_attempts,
@@ -533,7 +561,11 @@ class ProductionPhase7Driver:
             cfg = replace(
                 cfg, review=replace(cfg.review, auto_repair_enabled=request.auto_repair_enabled)
             )
-        spec = parse_spec(request.spec_path)
+        spec = bind_spec_identity(
+            parse_spec(request.spec_path),
+            repo_root=request.repo_root,
+            spec_directory=cfg.task_spec.directory,
+        )
         github = _FakeGitHubClient(
             services.github,
             repository=request.environment.get("GITHUB_REPOSITORY", ""),

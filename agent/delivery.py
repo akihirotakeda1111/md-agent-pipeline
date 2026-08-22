@@ -42,7 +42,12 @@ from agent.policy import classify_control_plane_error
 from agent.pr import build_pr_body, build_pr_title
 from agent.reconcile import reconcile_open_pull
 from agent.scope import check_scope, validate_spec_scope_policy
-from agent.spec import TaskSpec, parse_spec
+from agent.spec import (
+    TaskSpec,
+    bind_spec_identity,
+    is_canonical_spec_path,
+    parse_spec,
+)
 from agent.summary import render_summary, write_github_summary
 from agent.workunit import WorkUnitReport, file_sha256, load_work_unit_report
 
@@ -93,24 +98,31 @@ def assert_pr_allowed(report: WorkUnitReport) -> None:
 
 
 def assert_report_matches_spec(
-    spec: TaskSpec, report: WorkUnitReport, repo_root: Path | str
+    spec: TaskSpec, report: WorkUnitReport, *, spec_directory: str
 ) -> None:
-    if report.spec_id != spec.id:
+    if not report.spec_sha256:
         raise AgentError.escalation_required(
-            f"report spec_id {report.spec_id!r} does not match spec {spec.id!r}",
-            code="REPORT_SPEC_MISMATCH",
+            "report spec_sha256 is missing",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    if not is_canonical_spec_path(report.spec_path, spec_directory=spec_directory):
+        raise AgentError.escalation_required(
+            f"report spec_path is not canonical: {report.spec_path!r}",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    if (
+        report.spec_id != spec.id
+        or report.spec_path != (spec.source_path or "")
+        or report.spec_sha256 != spec.spec_sha256
+    ):
+        raise AgentError.escalation_required(
+            "WorkUnitReport Task Spec identity does not match the current spec",
+            code="SPEC_IDENTITY_MISMATCH",
         )
     if report.branch != spec.target_branch:
         raise AgentError.escalation_required(
             f"report branch {report.branch!r} does not match target_branch {spec.target_branch!r}",
             code="REPORT_BRANCH_MISMATCH",
-        )
-    expected = _normalize_spec_path(spec.source_path or spec.id, repo_root)
-    actual = _normalize_spec_path(report.spec_path or spec.id, repo_root)
-    if expected != actual:
-        raise AgentError.escalation_required(
-            f"report spec_path {report.spec_path!r} does not match {spec.source_path!r}",
-            code="REPORT_SPEC_MISMATCH",
         )
     if not report.base_sha.strip():
         raise AgentError.escalation_required(
@@ -139,16 +151,6 @@ def assert_patch_digest(report_dir: Path | str, report: WorkUnitReport) -> None:
         )
 
 
-def _normalize_spec_path(path: str, repo_root: Path | str) -> str:
-    raw = Path(path)
-    root = Path(repo_root).resolve()
-    candidate = raw if raw.is_absolute() else root / raw
-    try:
-        return candidate.resolve().relative_to(root).as_posix()
-    except (OSError, ValueError):
-        return Path(path).as_posix().replace("\\", "/")
-
-
 def run_delivery(
     spec: TaskSpec | Path | str,
     *,
@@ -162,6 +164,11 @@ def run_delivery(
     root = Path(repo_root)
     parsed = spec if isinstance(spec, TaskSpec) else parse_spec(spec)
     validate_spec_scope_policy(parsed, cfg.runtime_edit_policy)
+    parsed = bind_spec_identity(
+        parsed,
+        repo_root=root,
+        spec_directory=cfg.task_spec.directory,
+    )
     report = load_work_unit_report(report_dir)
     client = github
     try:
@@ -195,7 +202,7 @@ def _deliver(
     cfg: AgentConfig,
     github: GitHubClient,
 ) -> DeliveryResult:
-    assert_report_matches_spec(spec, report, root)
+    assert_report_matches_spec(spec, report, spec_directory=cfg.task_spec.directory)
     assert_patch_digest(report_dir, report)
     ensure_agent_labels(github)
     existing = reconcile_open_pull(spec, github)

@@ -66,9 +66,9 @@ def test_08_10_scope_failures_do_not_git_write(
 @pytest.mark.parametrize(
     ("case_id", "override", "reason"),
     [
-        ("11", {"spec_id": "different"}, "REPORT_SPEC_MISMATCH"),
+        ("11", {"spec_id": "different"}, "SPEC_IDENTITY_MISMATCH"),
         ("12", {"branch": "agent/different"}, "REPORT_BRANCH_MISMATCH"),
-        ("13", {"spec_path": "specs/tasks/different.md"}, "REPORT_SPEC_MISMATCH"),
+        ("13", {"spec_path": "specs/tasks/different.md"}, "SPEC_IDENTITY_MISMATCH"),
         ("15", {"base_sha": ""}, "BASE_SHA_MISSING"),
     ],
 )

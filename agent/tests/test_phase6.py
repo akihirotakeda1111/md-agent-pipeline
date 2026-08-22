@@ -13,7 +13,7 @@ from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error
 from agent.pr import build_pr_body, build_pr_title
 from agent.reconcile import prepare_execution_state
-from agent.spec import parse_spec
+from agent.spec import bind_spec_identity, parse_spec
 from agent.state import (
     ExecutionStatus,
     apply_transition,
@@ -29,13 +29,30 @@ EXAMPLE_SPEC = REPO_ROOT / "specs" / "tasks" / "example-task.md"
 PYTHON_COMMAND = Path(sys.executable).name
 
 
+def _bound_example_spec(repo_root: Path | None = None) -> object:
+    from agent.spec import TaskSpec
+
+    root = repo_root or REPO_ROOT
+    if repo_root is not None:
+        dest = root / "specs" / "tasks" / "example-task.md"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(EXAMPLE_SPEC.read_text(encoding="utf-8"), encoding="utf-8")
+        parsed = parse_spec(dest)
+    else:
+        parsed = parse_spec(EXAMPLE_SPEC)
+    bound = bind_spec_identity(parsed, repo_root=root, spec_directory="specs/tasks")
+    assert isinstance(bound, TaskSpec)
+    return bound
+
+
 def _report(**overrides: object) -> WorkUnitReport:
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = overrides.pop("spec", None) or _bound_example_spec()
     state = new_execution_state(spec)
     payload = {
         "outcome": "FINAL_VERIFICATION_PASSED",
         "spec_id": spec.id,
-        "spec_path": str(EXAMPLE_SPEC),
+        "spec_path": spec.source_path,
+        "spec_sha256": spec.spec_sha256,
         "base_sha": "abc",
         "branch": spec.target_branch,
         "state": state,
@@ -80,6 +97,7 @@ def test_no_pr_before_final_verification() -> None:
 
 def test_pr_body_generation() -> None:
     spec = parse_spec(EXAMPLE_SPEC)
+    spec = bind_spec_identity(spec, repo_root=REPO_ROOT, spec_directory="specs/tasks")
     body = build_pr_body(
         spec,
         completed_tasks=["task-1"],
@@ -108,11 +126,12 @@ def test_pr_body_generation() -> None:
     from agent.pr import is_same_work_unit_pull, parse_work_unit_marker
 
     marker = parse_work_unit_marker(body)
-    assert marker == {
-        "spec_id": spec.id,
-        "base_branch": spec.base_branch,
-        "target_branch": spec.target_branch,
-    }
+    assert marker is not None
+    assert marker["spec_id"] == spec.id
+    assert marker["spec_path"] == "specs/tasks/example-task.md"
+    assert marker["spec_sha256"] == spec.spec_sha256
+    assert marker["base_branch"] == spec.base_branch
+    assert marker["target_branch"] == spec.target_branch
     assert is_same_work_unit_pull(
         spec,
         {
@@ -385,7 +404,7 @@ class _FakeGitHub:
 def test_reconcile_open_pull_reuses_same_work_unit_only() -> None:
     from agent.reconcile import reconcile_open_pull
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec()
     reused = reconcile_open_pull(spec, _FakeGitHub(pulls=[_work_unit_pull(spec)]))  # type: ignore[arg-type]
     assert reused.action == "reuse"
     assert reused.pull is not None
@@ -417,12 +436,12 @@ def test_delivery_reuses_existing_pull_request(
     from agent.delivery import run_delivery
     from agent.workunit import file_sha256, write_work_unit_report
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec(tmp_path)
     report_dir = tmp_path / "report"
     report_dir.mkdir()
     patch = report_dir / "changes.patch"
     patch.write_text("", encoding="utf-8")
-    write_work_unit_report(report_dir, _report(patch_sha256=file_sha256(patch)))
+    write_work_unit_report(report_dir, _report(spec=spec, patch_sha256=file_sha256(patch)))
     github = _FakeGitHub(pulls=[_work_unit_pull(spec)])
     result = run_delivery(
         spec,
@@ -450,12 +469,12 @@ def test_same_branch_pr_without_work_unit_marker_is_not_reused(tmp_path: Path) -
     from agent.delivery import run_delivery
     from agent.workunit import file_sha256, write_work_unit_report
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec(tmp_path)
     report_dir = tmp_path / "report"
     report_dir.mkdir()
     patch = report_dir / "changes.patch"
     patch.write_text("", encoding="utf-8")
-    write_work_unit_report(report_dir, _report(patch_sha256=file_sha256(patch)))
+    write_work_unit_report(report_dir, _report(spec=spec, patch_sha256=file_sha256(patch)))
     github = _FakeGitHub(
         pulls=[
             {
@@ -485,12 +504,12 @@ def test_same_branch_pr_with_other_spec_id_is_not_reused(tmp_path: Path) -> None
     from agent.pr import build_work_unit_marker
     from agent.workunit import file_sha256, write_work_unit_report
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec(tmp_path)
     report_dir = tmp_path / "report"
     report_dir.mkdir()
     patch = report_dir / "changes.patch"
     patch.write_text("", encoding="utf-8")
-    write_work_unit_report(report_dir, _report(patch_sha256=file_sha256(patch)))
+    write_work_unit_report(report_dir, _report(spec=spec, patch_sha256=file_sha256(patch)))
     foreign = build_work_unit_marker(spec).replace(spec.id, "other-spec")
     github = _FakeGitHub(
         pulls=[
@@ -528,9 +547,9 @@ def _bind_report(report_dir: Path, report: WorkUnitReport, patch_text: str = "")
 def test_context_mismatch_blocks_existing_pr_reuse(tmp_path: Path) -> None:
     from agent.delivery import run_delivery
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec(tmp_path)
     report_dir = tmp_path / "report"
-    _bind_report(report_dir, _report(spec_id="other-spec"))
+    _bind_report(report_dir, _report(spec=spec, spec_id="other-spec"))
     github = _FakeGitHub(pulls=[{"number": 7, "html_url": "https://example.test/pull/7"}])
     result = run_delivery(
         spec,
@@ -548,11 +567,11 @@ def test_patch_digest_mismatch_blocks_existing_pr_reuse(tmp_path: Path) -> None:
     from agent.delivery import run_delivery
     from agent.workunit import write_work_unit_report
 
-    spec = parse_spec(EXAMPLE_SPEC)
+    spec = _bound_example_spec(tmp_path)
     report_dir = tmp_path / "report"
     report_dir.mkdir()
     (report_dir / "changes.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
-    write_work_unit_report(report_dir, _report(patch_sha256="0" * 64))
+    write_work_unit_report(report_dir, _report(spec=spec, patch_sha256="0" * 64))
     github = _FakeGitHub(pulls=[{"number": 7, "html_url": "https://example.test/pull/7"}])
     result = run_delivery(
         spec,
@@ -566,7 +585,7 @@ def test_patch_digest_mismatch_blocks_existing_pr_reuse(tmp_path: Path) -> None:
     assert github.labels.get("issue:7", {}).get("labels") != "agent:ready"
 
 
-DELIVER_SPEC = """---
+DELIVER_SPEC = f"""---
 schema_version: 1
 id: deliver-demo
 title: Deliver Demo
@@ -613,15 +632,15 @@ Create src/app.py.
 ### Validation
 
 ```text
-{python_command} -c "print(1)"
+{PYTHON_COMMAND} -c "print(1)"
 ```
 
 # Final Verification
 
 ```text
-{python_command} -c "print(1)"
+{PYTHON_COMMAND} -c "print(1)"
 ```
-""".format(python_command=PYTHON_COMMAND)
+"""
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -649,9 +668,10 @@ def test_deliver_scope_rejects_agent_state_in_patch(tmp_path: Path) -> None:
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
     (repo / ".gitignore").write_text(".agent/state/*.json\n", encoding="utf-8")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", ".gitignore", "spec.md")
+    _git(repo, "add", ".gitignore", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -663,10 +683,10 @@ def test_deliver_scope_rejects_agent_state_in_patch(tmp_path: Path) -> None:
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py", ".agent/state/leaked.json"),
@@ -700,9 +720,10 @@ def test_deliver_head_mismatch_does_not_rebase(tmp_path: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     base = head_sha(repo)
     (repo / "src").mkdir()
@@ -712,10 +733,10 @@ def test_deliver_head_mismatch_does_not_rebase(tmp_path: Path) -> None:
     _git(repo, "add", "src/app.py")
     _git(repo, "commit", "-m", "ahead")
     _git(repo, "checkout", "-b", "feature/deliver")
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py",),
@@ -749,9 +770,10 @@ def test_deliver_commits_after_scope_manifest_and_fv(tmp_path: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -760,11 +782,11 @@ def test_deliver_commits_after_scope_manifest_and_fv(tmp_path: Path) -> None:
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     state = replace(new_execution_state(spec), state=ExecutionStatus.FINAL_VALIDATING)
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py",),
@@ -808,9 +830,10 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -819,11 +842,11 @@ def test_deliver_creates_missing_labels_and_opens_pr(tmp_path: Path) -> None:
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     state = replace(new_execution_state(spec), state=ExecutionStatus.FINAL_VALIDATING)
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py",),
@@ -920,9 +943,10 @@ def test_patch_manifest_mismatch_does_not_commit(tmp_path: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -931,10 +955,10 @@ def test_patch_manifest_mismatch_does_not_commit(tmp_path: Path) -> None:
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/other.py",),
@@ -966,9 +990,10 @@ def test_missing_ephemeral_state_restarts_work_unit(tmp_path: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     spec = parse_spec(spec_path)
     leftover = apply_transition(
@@ -1021,7 +1046,8 @@ def test_work_unit_report_keeps_repair_attempts_after_final_verification(tmp_pat
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(
         DELIVER_SPEC.replace(
             f'{PYTHON_COMMAND} -c "print(1)"',
@@ -1033,7 +1059,7 @@ def test_work_unit_report_keeps_repair_attempts_after_final_verification(tmp_pat
         "from pathlib import Path\nraise SystemExit(0 if Path('src/app.py').is_file() else 1)\n",
         encoding="utf-8",
     )
-    _git(repo, "add", "spec.md", "check.py")
+    _git(repo, "add", "specs/tasks/deliver-demo.md", "check.py")
     _git(repo, "commit", "-m", "init")
     calls = {"n": 0}
 
@@ -1075,14 +1101,15 @@ def test_deliver_final_verification_failure_does_not_git_write(tmp_path: Path) -
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
     (repo / "fail_fv.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
     fail_body = DELIVER_SPEC.rsplit("# Final Verification", 1)[0] + (
         f"# Final Verification\n\n```text\n{PYTHON_COMMAND} fail_fv.py\n```\n"
     )
     spec_path.write_text(fail_body, encoding="utf-8")
-    _git(repo, "add", "spec.md", "fail_fv.py")
+    _git(repo, "add", "specs/tasks/deliver-demo.md", "fail_fv.py")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -1091,10 +1118,10 @@ def test_deliver_final_verification_failure_does_not_git_write(tmp_path: Path) -
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py",),
@@ -1134,9 +1161,10 @@ def test_deliver_rejects_runtime_protected_path_in_patch(tmp_path: Path) -> None
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "p6@example.com")
     _git(repo, "config", "user.name", "Phase6")
-    spec_path = repo / "spec.md"
+    spec_path = repo / "specs" / "tasks" / "deliver-demo.md"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(DELIVER_SPEC, encoding="utf-8")
-    _git(repo, "add", "spec.md")
+    _git(repo, "add", "specs/tasks/deliver-demo.md")
     _git(repo, "commit", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     base = head_sha(repo)
@@ -1147,10 +1175,10 @@ def test_deliver_rejects_runtime_protected_path_in_patch(tmp_path: Path) -> None
     report_dir = tmp_path / "report"
     patch = report_dir / "changes.patch"
     export_patch(repo, base, patch)
-    spec = parse(spec_path)
+    spec = bind_spec_identity(parse(spec_path), repo_root=repo, spec_directory="specs/tasks")
     report = _report(
+        spec=spec,
         spec_id=spec.id,
-        spec_path=str(spec_path),
         base_sha=base,
         branch=spec.target_branch,
         changed_files=("src/app.py", "agent/config.json"),

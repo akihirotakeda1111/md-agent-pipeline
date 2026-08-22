@@ -152,12 +152,14 @@ def _init_repo(
         "sys.exit(0 if path.is_file() and path.read_text() == 'ok\\n' else 1)\n",
         encoding="utf-8",
     )
-    spec_path = repo / "spec.md"
+    spec_dir = repo / "specs" / "tasks"
+    spec_dir.mkdir(parents=True)
+    spec_path = spec_dir / "policy-demo.md"
     spec_path.write_text(
         _spec_text(allowed=allowed, forbidden=forbidden, limit=limit),
         encoding="utf-8",
     )
-    _git(repo, "add", "check_app.py", "spec.md")
+    _git(repo, "add", "check_app.py", "specs/tasks/policy-demo.md")
     _git(repo, "commit", "-m", "init")
     return repo, spec_path
 

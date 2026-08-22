@@ -43,7 +43,7 @@ from agent.gitwrite import commit_paths, head_sha, push_branch
 from agent.labels import apply_status_label, current_terminal_status_label, ensure_review_labels
 from agent.notify import EscalationNotice, mention_from_config
 from agent.policy import classify_control_plane_error, is_failed
-from agent.pr import parse_work_unit_marker
+from agent.pr import assert_spec_matches_marker, parse_work_unit_marker
 from agent.review_classify import classify_review_comment
 from agent.review_collect import collect_review_feedback, head_sha_from_pull
 from agent.review_filter import applies_to_current_head, prefilter_reason
@@ -52,7 +52,6 @@ from agent.review_policy import (
     AUTO_REPAIR_DEFERRED_REASON,
     decide_review_policy,
 )
-from agent.review_prepare import find_spec_by_id
 from agent.review_prompt import build_review_repair_prompt
 from agent.review_terminal import (
     CodeRabbitTerminal,
@@ -61,6 +60,7 @@ from agent.review_terminal import (
 )
 from agent.review_track import (
     REVIEW_STATE_START,
+    REVIEW_TRACK_SCHEMA_VERSION,
     ReviewTrack,
     empty_review_track,
     parse_review_track,
@@ -74,7 +74,7 @@ from agent.review_types import (
     ReviewPolicyAction,
 )
 from agent.scope import check_scope, validate_spec_scope_policy
-from agent.spec import TaskSpec, parse_spec
+from agent.spec import TaskSpec, bind_spec_identity, canonicalize_spec_path, parse_spec
 from agent.validation import run_validation_text
 
 ClassifierFn = Callable[[ReviewFeedback, TaskSpec], ClassificationResult]
@@ -195,15 +195,12 @@ def _run_review(
             f"HEAD {actual_head} does not match pull head {head_sha_expected}",
             code="BASE_SHA_MISMATCH",
         )
-    spec = parse_spec(root / spec_path) if spec_path else None
-    if spec is None:
-        marker = parse_work_unit_marker(str(pull.get("body") or ""))
-        if marker is None:
-            raise AgentError.escalation_required(
-                "pull request is not an orchestrator work unit",
-                code="WORK_UNIT_PR_MISMATCH",
-            )
-        spec = parse_spec(find_spec_by_id(root, marker["spec_id"], config=cfg))
+    spec = _load_review_spec(
+        root=root,
+        pull=pull,
+        spec_path=spec_path,
+        cfg=cfg,
+    )
     validate_spec_scope_policy(spec, cfg.runtime_edit_policy)
     ensure_review_labels(client)
     track_id, track = load_review_track(
@@ -579,6 +576,58 @@ def _apply_review_fix(
     return commit_sha
 
 
+def _load_review_spec(
+    *,
+    root: Path,
+    pull: dict[str, Any],
+    spec_path: str | None,
+    cfg: AgentConfig,
+) -> TaskSpec:
+    marker = parse_work_unit_marker(str(pull.get("body") or ""))
+    if marker is None:
+        raise AgentError.escalation_required(
+            "pull request is not an orchestrator work unit",
+            code="WORK_UNIT_PR_MISMATCH",
+        )
+    marker_path = marker.get("spec_path") or ""
+    if not marker_path or not marker.get("spec_sha256"):
+        raise AgentError.escalation_required(
+            "PR marker is missing spec_path/spec_sha256",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    canonical = canonicalize_spec_path(
+        marker_path,
+        repo_root=root,
+        spec_directory=cfg.task_spec.directory,
+    )
+    if canonical != marker_path:
+        raise AgentError.escalation_required(
+            f"PR marker spec_path is not canonical: {marker_path!r}",
+            code="SPEC_IDENTITY_MISMATCH",
+        )
+    if spec_path:
+        requested = canonicalize_spec_path(
+            spec_path,
+            repo_root=root,
+            spec_directory=cfg.task_spec.directory,
+        )
+        if requested != canonical:
+            raise AgentError.escalation_required(
+                "review spec_path does not match the PR marker",
+                code="SPEC_IDENTITY_MISMATCH",
+            )
+    spec_file = root / canonical
+    if not spec_file.is_file():
+        raise AgentError.escalation_required(
+            f"Task Spec not found at marker spec_path: {canonical}",
+            code="SPEC_NOT_FOUND",
+        )
+    spec = parse_spec(spec_file)
+    spec = bind_spec_identity(spec, repo_root=root, spec_directory=cfg.task_spec.directory)
+    assert_spec_matches_marker(spec, marker)
+    return spec
+
+
 def _merge_base_sha(repo_root: Path, spec: TaskSpec) -> str:
     for ref in (f"origin/{spec.base_branch}", spec.base_branch):
         completed = run_git(repo_root, "merge-base", ref, "HEAD")
@@ -609,7 +658,7 @@ def load_review_track(
                 code="UNSAFE_REVIEW_TRACK",
             )
         parsed = parse_review_track(body)
-        if parsed is None or parsed.schema_version != 1:
+        if parsed is None or parsed.schema_version != REVIEW_TRACK_SCHEMA_VERSION:
             raise AgentError.escalation_required(
                 "review tracking comment schema is invalid",
                 code="UNSAFE_REVIEW_TRACK",
