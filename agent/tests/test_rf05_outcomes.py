@@ -350,16 +350,8 @@ def test_delivery_failure_code_is_not_failure_class() -> None:
     from agent.config import load_config
     from agent.delivery import _report_failure
 
-    class Github:
-        def list_open_pulls(self, head_branch=None):
-            return []
-
-        def create_issue(self, **kwargs):
-            return {"number": 1}
-
     spec = _spec()
-    github = Github()
-    failed = _report_failure(spec, _report(outcome="FAILED"), load_config(), github)
+    failed = _report_failure(spec, _report(outcome="FAILED"), load_config())
     assert failed.code is None
     assert failed.failure_class is FailureClass.ENVIRONMENT_FAILURE
     coded = _report_failure(
@@ -370,7 +362,6 @@ def test_delivery_failure_code_is_not_failure_class() -> None:
             code="REPAIR_ATTEMPT_LIMIT",
         ),
         load_config(),
-        github,
     )
     assert coded.code == "REPAIR_ATTEMPT_LIMIT"
     assert coded.failure_class is FailureClass.ESCALATION_REQUIRED

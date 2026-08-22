@@ -26,6 +26,10 @@ class FakeGitHub:
         self.labels: set[str] = set()
         self.issue_labels: set[str] = set()
         self.next_id = 8000
+        self.failures: dict[str, BaseException] = {}
+
+    def fail(self, operation: str, error: BaseException) -> None:
+        self.failures[operation] = error
 
     def current(self, operation: str, default: Any = None) -> Any:
         items = self.responses.setdefault(operation, [])
@@ -35,6 +39,9 @@ class FakeGitHub:
 
     def request(self, operation: str, **payload: Any) -> Any:
         self.observations.github_call(operation, payload)
+        error = self.failures.get(operation)
+        if error is not None:
+            raise error
         return deepcopy(self.current(operation))
 
     def calls(self, operation: str) -> list[dict[str, Any]]:
@@ -70,6 +77,9 @@ class FakeGitHub:
 
     def add_pr_comment(self, **payload: Any) -> Any:
         self.observations.github_call("add_pr_comment", payload)
+        error = self.failures.get("add_pr_comment")
+        if error is not None:
+            raise error
         comment = {
             "id": self.next_id,
             "body": payload.get("body"),
@@ -81,6 +91,9 @@ class FakeGitHub:
 
     def set_labels(self, **payload: Any) -> Any:
         self.observations.github_call("set_labels", payload)
+        error = self.failures.get("set_labels")
+        if error is not None:
+            raise error
         for name in payload.get("labels") or ():
             self.labels.add(str(name))
         if payload.get("name"):

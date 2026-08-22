@@ -19,6 +19,7 @@ from agent.config import AgentConfig, load_config
 from agent.cycle import run_final_verification
 from agent.errors import AgentError
 from agent.events import (
+    FAILED,
     READY_FOR_HUMAN,
     REVIEW_CLASSIFIED,
     REVIEW_COLLECTED,
@@ -30,6 +31,7 @@ from agent.events import (
     REVIEW_POLICY_APPLIED,
     REVIEW_RECEIVED,
     emit,
+    emit_notification_failed_best_effort,
 )
 from agent.github_api import GitHubClient, github_client_from_env
 from agent.gitutil import (
@@ -231,7 +233,7 @@ def run_review(
 ) -> ReviewResult:
     cfg = config or load_config()
     root = Path(repo_root)
-    client = github or github_client_from_env()
+    client = github
     rest_env, codex_key = detach_codex_api_key(env, api_key_env=cfg.codex.api_key_env)
     classifier_env, classifier_key = detach_codex_api_key(
         rest_env, api_key_env=cfg.review.api_key_env
@@ -243,6 +245,8 @@ def run_review(
         extra={"pull_number": pull_number},
     )
     try:
+        if client is None:
+            client = github_client_from_env()
         return _run_review(
             root=root,
             pull_number=pull_number,
@@ -971,7 +975,7 @@ def _escalate(
 
 
 def _control_plane_failure(
-    client: GitHubClient,
+    client: GitHubClient | None,
     pull_number: int,
     spec_path: str | None,
     repo_root: Path,
@@ -982,7 +986,7 @@ def _control_plane_failure(
     if spec_path:
         try:
             spec_id = parse_spec(repo_root / spec_path).id
-        except AgentError:
+        except Exception:
             spec_id = None
     classification = classify_control_plane_error(error)
     code = error.code if isinstance(error, AgentError) else "INTERNAL_FAILURE"
@@ -990,14 +994,32 @@ def _control_plane_failure(
         code = "INTERNAL_FAILURE"
     message = str(error)
     if is_failed(classification):
-        apply_status_label(client, pull_number, "agent:failed")
         outcome = ReviewOutcome.FAILED
         failure_class = FailureClass.ENVIRONMENT_FAILURE
     else:
-        apply_status_label(client, pull_number, "agent:escalated")
         outcome = ReviewOutcome.ESCALATED
         failure_class = FailureClass.ESCALATION_REQUIRED
+    result = ReviewResult(
+        outcome=outcome,
+        spec_id=spec_id,
+        pull_number=pull_number,
+        message=message,
+        code=code,
+        failure_class=failure_class,
+    )
+    if outcome is ReviewOutcome.FAILED:
+        emit(FAILED, message, task_id=spec_id, phase="review", extra={"code": code})
+    else:
         emit(REVIEW_ESCALATED, message, task_id=spec_id, phase="review", extra={"code": code})
+    if client is None:
+        return result
+    label = "agent:failed" if outcome is ReviewOutcome.FAILED else "agent:escalated"
+    try:
+        apply_status_label(client, pull_number, label)
+    except Exception as exc:
+        _emit_review_notification_failed(
+            "apply_status_label", spec_id, result.outcome.value, result.code, exc
+        )
     notice = EscalationNotice(
         task_id=spec_id or f"pull-{pull_number}",
         current_task=None,
@@ -1012,13 +1034,25 @@ def _control_plane_failure(
     )
     try:
         client.create_issue_comment(pull_number, notice.to_markdown())
-    except AgentError:
-        pass
-    return ReviewResult(
-        outcome=outcome,
-        spec_id=spec_id,
-        pull_number=pull_number,
-        message=message,
-        code=code,
-        failure_class=failure_class,
+    except Exception as exc:
+        _emit_review_notification_failed(
+            "create_issue_comment", spec_id, result.outcome.value, result.code, exc
+        )
+    return result
+
+
+def _emit_review_notification_failed(
+    operation: str,
+    spec_id: str | None,
+    primary_outcome: str,
+    primary_code: str | None,
+    error: BaseException,
+) -> None:
+    emit_notification_failed_best_effort(
+        phase="review",
+        task_id=spec_id,
+        primary_outcome=primary_outcome,
+        primary_code=primary_code,
+        operation=operation,
+        error=error,
     )
