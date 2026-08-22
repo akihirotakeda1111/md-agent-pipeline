@@ -23,6 +23,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from agent.config import AgentConfig, load_config
 from agent.errors import AgentError
+from agent.review_context import format_review_task_context
 from agent.review_types import ClassificationResult, ReviewClassification, ReviewFeedback
 from agent.spec import TaskSpec
 
@@ -93,17 +94,16 @@ def _request_body(item: ReviewFeedback, spec: TaskSpec, model: str) -> dict[str,
     instruction = CLASSIFY_PROMPT_PATH.read_text(encoding="utf-8").strip()
     user = "\n".join(
         [
-            "# Task Spec",
-            f"- id: {spec.id}",
-            f"- title: {spec.title}",
-            f"- allowed_paths: {', '.join(spec.allowed_paths)}",
-            f"- forbidden_paths: {', '.join(spec.forbidden_paths)}",
+            "# Classifier Responsibility",
+            "Classify semantic alignment with the Task Spec only.",
+            "Do not determine technical correctness, and do not decide whether to repair.",
             "",
-            "# Architecture Invariants",
-            spec.architecture_invariants.strip() or "(none)",
+            "# Task Scope",
+            f"- allowed_paths: {', '.join(spec.allowed_paths) or '(none)'}",
+            f"- forbidden_paths: {', '.join(spec.forbidden_paths) or '(none)'}",
+            "- Unspecified paths = Default Deny.",
             "",
-            "# Forbidden Actions",
-            spec.forbidden_actions.strip() or "(none)",
+            format_review_task_context(spec),
             "",
             "# Review Comment",
             f"- identity: {item.identity}",

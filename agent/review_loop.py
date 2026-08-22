@@ -12,7 +12,6 @@ from agent.codex_runner import (
     Executor,
     attach_codex_api_key,
     detach_codex_api_key,
-    resolve_task,
     run_codex,
 )
 from agent.config import AgentConfig, load_config
@@ -468,19 +467,19 @@ def _apply_review_fix(
     snapshot = capture_snapshot(root)
     if cfg.validation.require_clean_worktree:
         assert_clean_worktree(snapshot)
-    current_task = spec.tasks[-1] if spec.tasks else None
+    if not spec.tasks:
+        raise AgentError.invalid_spec("Task Spec has no tasks")
+    runner_task = spec.tasks[-1]
     prompt = build_review_repair_prompt(
         spec,
         repo_root=root,
         base_sha=_merge_base_sha(root, spec),
         accepted=tuple(accepted),
-        current_task=current_task,
         runtime_policy=cfg.runtime_edit_policy,
     )
-    task = current_task or resolve_task(spec, spec.tasks[0].id)
     run_codex(
         spec,
-        task,
+        runner_task,
         repo_root=root,
         config=cfg,
         env=attach_codex_api_key(env, codex_key, api_key_env=cfg.codex.api_key_env),

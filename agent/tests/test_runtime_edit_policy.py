@@ -507,7 +507,6 @@ def test_prompts_share_protected_forbidden_allowed_sections(tmp_path: Path) -> N
         repo_root=repo,
         base_sha=head_sha(repo),
         accepted=(),
-        current_task=task,
         runtime_policy=policy,
     )
     for prompt in (implement, repair, review):
