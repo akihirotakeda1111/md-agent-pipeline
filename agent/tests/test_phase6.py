@@ -22,7 +22,7 @@ from agent.state import (
     write_state,
 )
 from agent.summary import render_summary, write_github_summary
-from agent.workunit import WorkUnitReport
+from agent.workunit import WorkUnitOutcome, WorkUnitReport, derived_compat_booleans
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_SPEC = REPO_ROOT / "specs" / "tasks" / "example-task.md"
@@ -47,23 +47,52 @@ def _bound_example_spec(repo_root: Path | None = None) -> object:
 
 def _report(**overrides: object) -> WorkUnitReport:
     spec = overrides.pop("spec", None) or _bound_example_spec()
-    state = new_execution_state(spec)
+    outcome = overrides.pop("outcome", "FINAL_VERIFICATION_PASSED")
+    if not isinstance(outcome, WorkUnitOutcome):
+        try:
+            outcome = WorkUnitOutcome(str(outcome))
+        except ValueError as exc:
+            raise AgentError.invalid_input(
+                f"invalid work unit outcome: {outcome!r}",
+                code="INVALID_WORK_UNIT_REPORT",
+            ) from exc
+    final_passed, validation_passed, scope_allowed = derived_compat_booleans(outcome)
+    failure_class = None
+    if outcome is WorkUnitOutcome.FAILED:
+        failure_class = FailureClass.ENVIRONMENT_FAILURE
+    elif outcome is WorkUnitOutcome.ESCALATED:
+        failure_class = FailureClass.ESCALATION_REQUIRED
+    elif outcome is WorkUnitOutcome.SCOPE_VIOLATION:
+        failure_class = FailureClass.ESCALATION_REQUIRED
+    state = overrides.pop("state", None)
+    spec_task_ids = tuple(task.id for task in spec.tasks)
+    if state is None:
+        completed = spec_task_ids if outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED else ()
+        state = replace(new_execution_state(spec), completed_tasks=completed)
+    elif (
+        # Caller-supplied state is rewritten only when completed_tasks is omitted.
+        outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED
+        and "completed_tasks" not in overrides
+        and set(state.completed_tasks) != set(spec_task_ids)
+    ):
+        state = replace(state, completed_tasks=spec_task_ids)
     payload = {
-        "outcome": "FINAL_VERIFICATION_PASSED",
+        "outcome": outcome,
         "spec_id": spec.id,
         "spec_path": spec.source_path,
         "spec_sha256": spec.spec_sha256,
-        "base_sha": "abc",
-        "branch": spec.target_branch,
+        "base_sha": "a" * 40,
+        "branch": state.branch,
         "state": state,
-        "completed_tasks": ("task-1",),
+        "completed_tasks": state.completed_tasks,
         "changed_files": ("worker/app.py",),
         "validation_results": ("python check.py",),
-        "repair_attempts": 0,
-        "final_verification_passed": True,
-        "validation_passed": True,
-        "scope_allowed": True,
+        "repair_attempts": state.repair_attempts,
+        "final_verification_passed": final_passed,
+        "validation_passed": validation_passed,
+        "scope_allowed": scope_allowed,
         "message": "ok",
+        "failure_class": failure_class,
         "skip_reason": None,
         "patch_file": "changes.patch",
         "patch_sha256": "",
@@ -73,26 +102,24 @@ def _report(**overrides: object) -> WorkUnitReport:
 
 
 def test_commit_only_after_validation() -> None:
-    report = _report(validation_passed=False, final_verification_passed=False, outcome="FAILED")
+    report = _report(outcome="FAILED")
     with pytest.raises(AgentError) as exc_info:
         assert_commit_allowed(report)
     assert exc_info.value.code == "COMMIT_BEFORE_VALIDATION"
 
 
 def test_no_commit_on_scope_violation() -> None:
-    report = _report(scope_allowed=False, outcome="SCOPE_VIOLATION")
+    report = _report(outcome="SCOPE_VIOLATION")
     with pytest.raises(AgentError) as exc_info:
         assert_commit_allowed(report)
     assert exc_info.value.code == "COMMIT_SCOPE_VIOLATION"
 
 
-def test_no_pr_before_final_verification() -> None:
-    report = _report(
-        final_verification_passed=False, validation_passed=True, outcome="TASK_COMPLETED"
-    )
+def test_pr_not_allowed_before_final_verification() -> None:
+    report = _report(outcome="COMPLETED")
     with pytest.raises(AgentError) as exc_info:
         assert_pr_allowed(report)
-    assert exc_info.value.code == "PR_BEFORE_FINAL_VERIFICATION"
+    assert exc_info.value.code == "COMMIT_BEFORE_VALIDATION"
 
 
 def test_pr_body_generation() -> None:

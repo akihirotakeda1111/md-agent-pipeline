@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from agent.codex_runner import (
 )
 from agent.config import AgentConfig, load_config
 from agent.cycle import run_final_verification
-from agent.errors import AgentError, ErrorCategory
+from agent.errors import AgentError
 from agent.events import (
     READY_FOR_HUMAN,
     REVIEW_CLASSIFIED,
@@ -70,6 +71,7 @@ from agent.review_types import (
     ClassificationResult,
     PolicyDecision,
     ReviewFeedback,
+    ReviewOutcome,
     ReviewPolicyAction,
 )
 from agent.scope import check_scope, validate_spec_scope_policy
@@ -85,15 +87,104 @@ CLASSIFIER_FAIL_CLOSED = frozenset(
     }
 )
 STICKY_LABEL_OUTCOMES = {
-    "agent:ready": "READY_FOR_HUMAN",
-    "agent:escalated": "ESCALATED",
-    "agent:failed": "FAILED",
+    "agent:ready": ReviewOutcome.READY_FOR_HUMAN,
+    "agent:escalated": ReviewOutcome.ESCALATED,
+    "agent:failed": ReviewOutcome.FAILED,
 }
+STICKY_REVIEW_FAILED = "STICKY_REVIEW_FAILED"
+STICKY_REVIEW_ESCALATED = "STICKY_REVIEW_ESCALATED"
+
+
+def _as_review_outcome(value: object) -> ReviewOutcome:
+    if isinstance(value, ReviewOutcome):
+        return value
+    if isinstance(value, StrEnum):
+        raise AgentError.invalid_input(
+            f"invalid review outcome: {value!r}",
+            code="INVALID_REVIEW_RESULT",
+        )
+    if isinstance(value, str):
+        try:
+            return ReviewOutcome(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid review outcome: {value!r}",
+        code="INVALID_REVIEW_RESULT",
+    )
+
+
+def _as_failure_class(value: object) -> FailureClass | None:
+    if value is None:
+        return None
+    if isinstance(value, FailureClass):
+        return value
+    if isinstance(value, str):
+        try:
+            return FailureClass(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid review failure class: {value!r}",
+        code="INVALID_REVIEW_RESULT",
+    )
+
+
+def validate_review_result(result: ReviewResult) -> None:
+    if not isinstance(result.outcome, ReviewOutcome):
+        raise AgentError.invalid_input(
+            f"review outcome is not ReviewOutcome: {result.outcome!r}",
+            code="INVALID_REVIEW_RESULT",
+        )
+    if result.code is not None and (not isinstance(result.code, str) or result.code == ""):
+        raise AgentError.invalid_input(
+            "review result code must be a non-empty string when set",
+            code="INVALID_REVIEW_RESULT",
+        )
+    if result.outcome in {
+        ReviewOutcome.IN_REVIEW,
+        ReviewOutcome.REVIEW_FIX_PUSHED,
+        ReviewOutcome.READY_FOR_HUMAN,
+    }:
+        if result.failure_class is not None:
+            raise AgentError.invalid_input(
+                f"{result.outcome.value} must not set a failure class",
+                code="INVALID_REVIEW_RESULT",
+            )
+        return
+    if result.outcome is ReviewOutcome.FAILED:
+        if result.failure_class is not FailureClass.ENVIRONMENT_FAILURE:
+            raise AgentError.invalid_input(
+                "FAILED review result requires ENVIRONMENT_FAILURE",
+                code="INVALID_REVIEW_RESULT",
+            )
+        if not result.code:
+            raise AgentError.invalid_input(
+                "FAILED review result requires a code",
+                code="INVALID_REVIEW_RESULT",
+            )
+        return
+    if result.outcome is ReviewOutcome.ESCALATED:
+        if result.failure_class is not FailureClass.ESCALATION_REQUIRED:
+            raise AgentError.invalid_input(
+                "ESCALATED review result requires ESCALATION_REQUIRED",
+                code="INVALID_REVIEW_RESULT",
+            )
+        if not result.code:
+            raise AgentError.invalid_input(
+                "ESCALATED review result requires a code",
+                code="INVALID_REVIEW_RESULT",
+            )
+        return
+    raise AgentError.invalid_input(
+        f"unsupported review outcome: {result.outcome!r}",
+        code="INVALID_REVIEW_RESULT",
+    )
 
 
 @dataclass
 class ReviewResult:
-    outcome: str
+    outcome: ReviewOutcome
     spec_id: str | None
     pull_number: int
     message: str
@@ -101,10 +192,17 @@ class ReviewResult:
     processed: tuple[str, ...] = ()
     review_attempts: int = 0
     commit_sha: str | None = None
+    failure_class: FailureClass | None = None
+
+    def __post_init__(self) -> None:
+        self.outcome = _as_review_outcome(self.outcome)
+        self.failure_class = _as_failure_class(self.failure_class)
+        validate_review_result(self)
 
     def to_json_dict(self) -> dict[str, Any]:
+        validate_review_result(self)
         return {
-            "outcome": self.outcome,
+            "outcome": self.outcome.value,
             "spec_id": self.spec_id,
             "pull_number": self.pull_number,
             "message": self.message,
@@ -424,7 +522,7 @@ def _run_review(
     )
     apply_status_label(client, pull_number, "agent:review")
     return ReviewResult(
-        outcome="REVIEW_FIX_PUSHED",
+        outcome=ReviewOutcome.REVIEW_FIX_PUSHED,
         spec_id=spec.id,
         pull_number=pull_number,
         message="review repair committed and pushed",
@@ -771,16 +869,25 @@ def _sticky_terminal_result(
         return None
     outcome = STICKY_LABEL_OUTCOMES[label]
     code = None
-    if outcome == "ESCALATED" and terminal.is_escalating():
-        code = terminal.escalation_code()
+    failure_class = None
+    if outcome is ReviewOutcome.FAILED:
+        failure_class = FailureClass.ENVIRONMENT_FAILURE
+        code = STICKY_REVIEW_FAILED
+    elif outcome is ReviewOutcome.ESCALATED:
+        failure_class = FailureClass.ESCALATION_REQUIRED
+        if terminal.is_escalating():
+            code = terminal.escalation_code() or STICKY_REVIEW_ESCALATED
+        else:
+            code = STICKY_REVIEW_ESCALATED
     return ReviewResult(
         outcome=outcome,
         spec_id=spec.id,
         pull_number=pull_number,
-        message=f"keeping {outcome} for unchanged HEAD",
+        message=f"keeping {outcome.value} for unchanged HEAD",
         code=code,
         processed=track.processed,
         review_attempts=track.review_attempts,
+        failure_class=failure_class,
     )
 
 
@@ -791,7 +898,7 @@ def _in_review(
     message: str,
 ) -> ReviewResult:
     return ReviewResult(
-        outcome="IN_REVIEW",
+        outcome=ReviewOutcome.IN_REVIEW,
         spec_id=spec.id,
         pull_number=pull_number,
         message=message,
@@ -810,7 +917,7 @@ def _ready(
     apply_status_label(client, pull_number, "agent:ready")
     emit(READY_FOR_HUMAN, message, task_id=spec.id, phase="review", state="READY_FOR_HUMAN")
     return ReviewResult(
-        outcome="READY_FOR_HUMAN",
+        outcome=ReviewOutcome.READY_FOR_HUMAN,
         spec_id=spec.id,
         pull_number=pull_number,
         message=message,
@@ -852,13 +959,14 @@ def _escalate(
         client.create_issue_comment(pull_number, body)
     emit(REVIEW_ESCALATED, message, task_id=spec.id, phase="review", extra={"code": code})
     return ReviewResult(
-        outcome="ESCALATED",
+        outcome=ReviewOutcome.ESCALATED,
         spec_id=spec.id,
         pull_number=pull_number,
         message=message,
         code=code,
         processed=bound.processed,
         review_attempts=bound.review_attempts,
+        failure_class=FailureClass.ESCALATION_REQUIRED,
     )
 
 
@@ -878,13 +986,17 @@ def _control_plane_failure(
             spec_id = None
     classification = classify_control_plane_error(error)
     code = error.code if isinstance(error, AgentError) else "INTERNAL_FAILURE"
+    if not code:
+        code = "INTERNAL_FAILURE"
     message = str(error)
     if is_failed(classification):
         apply_status_label(client, pull_number, "agent:failed")
-        outcome = "FAILED"
+        outcome = ReviewOutcome.FAILED
+        failure_class = FailureClass.ENVIRONMENT_FAILURE
     else:
         apply_status_label(client, pull_number, "agent:escalated")
-        outcome = "ESCALATED"
+        outcome = ReviewOutcome.ESCALATED
+        failure_class = FailureClass.ESCALATION_REQUIRED
         emit(REVIEW_ESCALATED, message, task_id=spec_id, phase="review", extra={"code": code})
     notice = EscalationNotice(
         task_id=spec_id or f"pull-{pull_number}",
@@ -902,26 +1014,11 @@ def _control_plane_failure(
         client.create_issue_comment(pull_number, notice.to_markdown())
     except AgentError:
         pass
-    if isinstance(error, AgentError) and error.category is ErrorCategory.ENVIRONMENT_FAILURE:
-        return ReviewResult(
-            outcome=outcome,
-            spec_id=spec_id,
-            pull_number=pull_number,
-            message=message,
-            code=code,
-        )
-    if isinstance(error, AgentError):
-        return ReviewResult(
-            outcome=outcome,
-            spec_id=spec_id,
-            pull_number=pull_number,
-            message=message,
-            code=code,
-        )
     return ReviewResult(
-        outcome="ESCALATED",
+        outcome=outcome,
         spec_id=spec_id,
         pull_number=pull_number,
         message=message,
         code=code,
+        failure_class=failure_class,
     )

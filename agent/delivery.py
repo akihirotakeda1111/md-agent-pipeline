@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -49,12 +50,91 @@ from agent.spec import (
     parse_spec,
 )
 from agent.summary import render_summary, write_github_summary
-from agent.workunit import WorkUnitReport, file_sha256, load_work_unit_report
+from agent.workunit import WorkUnitOutcome, WorkUnitReport, file_sha256, load_work_unit_report
+
+
+class DeliveryOutcome(StrEnum):
+    PR_CREATED = "PR_CREATED"
+    FAILED = "FAILED"
+    ESCALATED = "ESCALATED"
+
+
+def _as_delivery_outcome(value: object) -> DeliveryOutcome:
+    if isinstance(value, DeliveryOutcome):
+        return value
+    if isinstance(value, StrEnum):
+        raise AgentError.invalid_input(
+            f"invalid delivery outcome: {value!r}",
+            code="INVALID_DELIVERY_RESULT",
+        )
+    if isinstance(value, str):
+        try:
+            return DeliveryOutcome(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid delivery outcome: {value!r}",
+        code="INVALID_DELIVERY_RESULT",
+    )
+
+
+def _as_failure_class(value: object) -> FailureClass | None:
+    if value is None:
+        return None
+    if isinstance(value, FailureClass):
+        return value
+    if isinstance(value, str):
+        try:
+            return FailureClass(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid delivery failure class: {value!r}",
+        code="INVALID_DELIVERY_RESULT",
+    )
+
+
+def validate_delivery_result(result: DeliveryResult) -> None:
+    if not isinstance(result.outcome, DeliveryOutcome):
+        raise AgentError.invalid_input(
+            f"delivery outcome is not DeliveryOutcome: {result.outcome!r}",
+            code="INVALID_DELIVERY_RESULT",
+        )
+    if result.code is not None and (not isinstance(result.code, str) or result.code == ""):
+        raise AgentError.invalid_input(
+            "delivery result code must be a non-empty string when set",
+            code="INVALID_DELIVERY_RESULT",
+        )
+    if result.outcome is DeliveryOutcome.PR_CREATED:
+        if result.failure_class is not None:
+            raise AgentError.invalid_input(
+                "PR_CREATED must not set a failure class",
+                code="INVALID_DELIVERY_RESULT",
+            )
+        return
+    if result.outcome is DeliveryOutcome.FAILED:
+        if result.failure_class is not FailureClass.ENVIRONMENT_FAILURE:
+            raise AgentError.invalid_input(
+                "FAILED delivery result requires ENVIRONMENT_FAILURE",
+                code="INVALID_DELIVERY_RESULT",
+            )
+        return
+    if result.outcome is DeliveryOutcome.ESCALATED:
+        if result.failure_class is not FailureClass.ESCALATION_REQUIRED:
+            raise AgentError.invalid_input(
+                "ESCALATED delivery result requires ESCALATION_REQUIRED",
+                code="INVALID_DELIVERY_RESULT",
+            )
+        return
+    raise AgentError.invalid_input(
+        f"unsupported delivery outcome: {result.outcome!r}",
+        code="INVALID_DELIVERY_RESULT",
+    )
 
 
 @dataclass
 class DeliveryResult:
-    outcome: str
+    outcome: DeliveryOutcome
     pr_url: str | None
     pr_number: int | None
     commit_sha: str | None
@@ -62,10 +142,17 @@ class DeliveryResult:
     summary: str
     message: str
     code: str | None = None
+    failure_class: FailureClass | None = None
+
+    def __post_init__(self) -> None:
+        self.outcome = _as_delivery_outcome(self.outcome)
+        self.failure_class = _as_failure_class(self.failure_class)
+        validate_delivery_result(self)
 
     def to_json_dict(self) -> dict[str, Any]:
+        validate_delivery_result(self)
         return {
-            "outcome": self.outcome,
+            "outcome": self.outcome.value,
             "pr_url": self.pr_url,
             "pr_number": self.pr_number,
             "commit_sha": self.commit_sha,
@@ -76,12 +163,12 @@ class DeliveryResult:
 
 
 def assert_commit_allowed(report: WorkUnitReport) -> None:
-    if not report.scope_allowed or report.outcome == "SCOPE_VIOLATION":
+    if report.outcome is WorkUnitOutcome.SCOPE_VIOLATION:
         raise AgentError.policy_violation(
             "no commit on scope violation",
             code="COMMIT_SCOPE_VIOLATION",
         )
-    if not report.validation_passed:
+    if report.outcome is not WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
         raise AgentError.policy_violation(
             "commit only after validation",
             code="COMMIT_BEFORE_VALIDATION",
@@ -90,11 +177,6 @@ def assert_commit_allowed(report: WorkUnitReport) -> None:
 
 def assert_pr_allowed(report: WorkUnitReport) -> None:
     assert_commit_allowed(report)
-    if not report.final_verification_passed:
-        raise AgentError.policy_violation(
-            "no PR before final verification",
-            code="PR_BEFORE_FINAL_VERIFICATION",
-        )
 
 
 def assert_report_matches_spec(
@@ -169,7 +251,7 @@ def run_delivery(
         repo_root=root,
         spec_directory=cfg.task_spec.directory,
     )
-    report = load_work_unit_report(report_dir)
+    report = load_work_unit_report(report_dir, spec=parsed)
     client = github
     try:
         if client is None:
@@ -189,7 +271,7 @@ def run_delivery(
         result.message,
         task_id=parsed.id,
         state=report.state.state.value,
-        extra={"outcome": result.outcome},
+        extra={"outcome": result.outcome.value},
     )
     return result
 
@@ -213,7 +295,7 @@ def _deliver(
         url = str(pull.get("html_url") or "")
         apply_status_label(github, number, "agent:review")
         return DeliveryResult(
-            outcome="PR_CREATED",
+            outcome=DeliveryOutcome.PR_CREATED,
             pr_url=url or None,
             pr_number=number,
             commit_sha=None,
@@ -222,10 +304,7 @@ def _deliver(
             message="reused existing pull request",
         )
 
-    if (
-        report.outcome in {"FAILED", "ESCALATED", "SCOPE_VIOLATION"}
-        or not report.final_verification_passed
-    ):
+    if report.outcome is not WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
         return _report_failure(spec, report, cfg, github)
 
     assert_pr_allowed(report)
@@ -309,7 +388,7 @@ def _deliver(
     apply_status_label(github, number, "agent:review")
     emit(PR_CREATED, url or f"pull request #{number}", task_id=spec.id, state="PR_CREATED")
     return DeliveryResult(
-        outcome="PR_CREATED",
+        outcome=DeliveryOutcome.PR_CREATED,
         pr_url=url or None,
         pr_number=number,
         commit_sha=commit_sha,
@@ -332,23 +411,29 @@ def _report_failure(
     github: GitHubClient,
 ) -> DeliveryResult:
     classification = FailureClass.ESCALATION_REQUIRED
-    if report.outcome == "FAILED":
+    if report.outcome is WorkUnitOutcome.FAILED:
         classification = FailureClass.ENVIRONMENT_FAILURE
-    if report.classification == FailureClass.ENVIRONMENT_FAILURE.value:
+    if report.failure_class is FailureClass.ENVIRONMENT_FAILURE:
         classification = FailureClass.ENVIRONMENT_FAILURE
     notice = _notice_from_report(spec, report, report.message, classification, cfg)
+    outcome = (
+        DeliveryOutcome.FAILED
+        if classification is FailureClass.ENVIRONMENT_FAILURE
+        else DeliveryOutcome.ESCALATED
+    )
     result = DeliveryResult(
-        outcome="FAILED" if classification is FailureClass.ENVIRONMENT_FAILURE else "ESCALATED",
+        outcome=outcome,
         pr_url=None,
         pr_number=None,
         commit_sha=None,
         notice=notice,
         summary="",
         message=report.message,
-        code=report.classification,
+        code=report.code,
+        failure_class=classification,
     )
     _notify(github, spec, result, cfg)
-    event = FAILED if result.outcome == "FAILED" else ESCALATED
+    event = FAILED if result.outcome is DeliveryOutcome.FAILED else ESCALATED
     emit(event, report.message, task_id=spec.id, state=report.state.state.value)
     return result
 
@@ -360,8 +445,12 @@ def _failure_result(
     classification: FailureClass,
     cfg: AgentConfig,
 ) -> DeliveryResult:
-    outcome = "FAILED" if classification is FailureClass.ENVIRONMENT_FAILURE else "ESCALATED"
-    event = FAILED if outcome == "FAILED" else ESCALATED
+    outcome = (
+        DeliveryOutcome.FAILED
+        if classification is FailureClass.ENVIRONMENT_FAILURE
+        else DeliveryOutcome.ESCALATED
+    )
+    event = FAILED if outcome is DeliveryOutcome.FAILED else ESCALATED
     emit(event, str(error), task_id=spec.id, state=report.state.state.value)
     code = error.code if isinstance(error, AgentError) else None
     return DeliveryResult(
@@ -373,6 +462,7 @@ def _failure_result(
         summary="",
         message=str(error),
         code=code,
+        failure_class=classification,
     )
 
 
@@ -408,7 +498,7 @@ def _notify(
     if result.notice is None or github is None:
         return
     body = result.notice.to_markdown()
-    label = "agent:failed" if result.outcome == "FAILED" else "agent:escalated"
+    label = "agent:failed" if result.outcome is DeliveryOutcome.FAILED else "agent:escalated"
     if result.pr_number is not None:
         github.create_issue_comment(result.pr_number, body)
         apply_status_label(github, result.pr_number, label)
@@ -420,7 +510,7 @@ def _notify(
         apply_status_label(github, number, label)
         return
     github.create_issue(
-        title=f"{spec.id}: agent {result.outcome.lower()}",
+        title=f"{spec.id}: agent {result.outcome.value.lower()}",
         body=body,
         labels=[label],
     )
@@ -430,16 +520,21 @@ def _summary_markdown(spec: TaskSpec, report: WorkUnitReport, result: DeliveryRe
     detail = result.message
     if result.code:
         detail = f"{result.code}: {result.message}"
+    state = (
+        report.state.state.value
+        if result.outcome is not DeliveryOutcome.PR_CREATED
+        else "PR_CREATED"
+    )
     return render_summary(
         spec_path=report.spec_path or spec.id,
         task_id=spec.id,
-        state=report.state.state.value if result.outcome != "PR_CREATED" else "PR_CREATED",
+        state=state,
         current_task=report.current_task,
         completed_tasks=report.completed_tasks,
         changed_files=report.changed_files,
         validation_results=report.validation_results,
         repair_attempts=report.repair_attempts,
         pr_url=result.pr_url,
-        failure_reason=detail if result.outcome == "FAILED" else None,
-        escalation_reason=detail if result.outcome == "ESCALATED" else None,
+        failure_reason=detail if result.outcome is DeliveryOutcome.FAILED else None,
+        escalation_reason=detail if result.outcome is DeliveryOutcome.ESCALATED else None,
     )

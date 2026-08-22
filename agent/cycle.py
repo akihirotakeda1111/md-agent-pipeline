@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -62,32 +63,158 @@ from agent.state import (
 )
 from agent.validation import ValidationRecord, run_validation_text
 
+REPAIR_ATTEMPT_LIMIT = "REPAIR_ATTEMPT_LIMIT"
+_ESCALATED_FAILURE_CLASSES = frozenset(
+    {
+        FailureClass.AGENT_REPAIRABLE,
+        FailureClass.ESCALATION_REQUIRED,
+    }
+)
+
+
+class CycleOutcome(StrEnum):
+    TASK_COMPLETED = "TASK_COMPLETED"
+    FINAL_VERIFICATION_PASSED = "FINAL_VERIFICATION_PASSED"
+    FAILED = "FAILED"
+    ESCALATED = "ESCALATED"
+    SCOPE_VIOLATION = "SCOPE_VIOLATION"
+
+
+_SUCCESS_CYCLE_OUTCOMES = frozenset(
+    {
+        CycleOutcome.TASK_COMPLETED,
+        CycleOutcome.FINAL_VERIFICATION_PASSED,
+    }
+)
+
+
+def _as_cycle_outcome(value: object) -> CycleOutcome:
+    if isinstance(value, CycleOutcome):
+        return value
+    if isinstance(value, StrEnum):
+        raise AgentError.invalid_input(
+            f"invalid cycle outcome: {value!r}",
+            code="INVALID_CYCLE_RESULT",
+        )
+    if isinstance(value, str):
+        try:
+            return CycleOutcome(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid cycle outcome: {value!r}",
+        code="INVALID_CYCLE_RESULT",
+    )
+
+
+def _as_failure_class(value: object) -> FailureClass | None:
+    if value is None:
+        return None
+    if isinstance(value, FailureClass):
+        return value
+    if isinstance(value, str):
+        try:
+            return FailureClass(value)
+        except ValueError:
+            pass
+    raise AgentError.invalid_input(
+        f"invalid cycle failure class: {value!r}",
+        code="INVALID_CYCLE_RESULT",
+    )
+
+
+def validate_cycle_result(result: CycleResult) -> None:
+    if not isinstance(result.outcome, CycleOutcome):
+        raise AgentError.invalid_input(
+            f"cycle outcome is not CycleOutcome: {result.outcome!r}",
+            code="INVALID_CYCLE_RESULT",
+        )
+    if result.code is not None and (not isinstance(result.code, str) or result.code == ""):
+        raise AgentError.invalid_input(
+            "cycle result code must be a non-empty string when set",
+            code="INVALID_CYCLE_RESULT",
+        )
+    if result.outcome in _SUCCESS_CYCLE_OUTCOMES:
+        if result.failure_class is not None:
+            raise AgentError.invalid_input(
+                f"{result.outcome.value} must not set a failure class",
+                code="INVALID_CYCLE_RESULT",
+            )
+        if result.code is not None:
+            raise AgentError.invalid_input(
+                f"{result.outcome.value} must not set a code",
+                code="INVALID_CYCLE_RESULT",
+            )
+        return
+    if result.outcome is CycleOutcome.FAILED:
+        if result.failure_class is not FailureClass.ENVIRONMENT_FAILURE:
+            raise AgentError.invalid_input(
+                "FAILED cycle result requires ENVIRONMENT_FAILURE",
+                code="INVALID_CYCLE_RESULT",
+            )
+        return
+    if result.outcome is CycleOutcome.ESCALATED:
+        if result.failure_class not in _ESCALATED_FAILURE_CLASSES:
+            raise AgentError.invalid_input(
+                "ESCALATED cycle result requires AGENT_REPAIRABLE or ESCALATION_REQUIRED",
+                code="INVALID_CYCLE_RESULT",
+            )
+        if (
+            result.failure_class is FailureClass.AGENT_REPAIRABLE
+            and result.message == "repair_attempt_limit reached"
+            and result.code != REPAIR_ATTEMPT_LIMIT
+        ):
+            raise AgentError.invalid_input(
+                "repair limit cycle result requires code REPAIR_ATTEMPT_LIMIT",
+                code="INVALID_CYCLE_RESULT",
+            )
+        return
+    if result.outcome is CycleOutcome.SCOPE_VIOLATION:
+        if result.failure_class is not FailureClass.ESCALATION_REQUIRED:
+            raise AgentError.invalid_input(
+                "SCOPE_VIOLATION cycle result requires ESCALATION_REQUIRED",
+                code="INVALID_CYCLE_RESULT",
+            )
+        return
+    raise AgentError.invalid_input(
+        f"unsupported cycle outcome: {result.outcome!r}",
+        code="INVALID_CYCLE_RESULT",
+    )
+
 
 @dataclass
 class CycleResult:
-    outcome: str
+    outcome: CycleOutcome
     spec_id: str
     task_id: str | None
     base_sha: str | None
     state: ExecutionState
     scope: ScopeCheckResult | None = None
     validations: list[ValidationRecord] = field(default_factory=list)
-    classification: FailureClass | None = None
+    failure_class: FailureClass | None = None
     repair_attempts: int = 0
     message: str = ""
+    code: str | None = None
+
+    def __post_init__(self) -> None:
+        self.outcome = _as_cycle_outcome(self.outcome)
+        self.failure_class = _as_failure_class(self.failure_class)
+        validate_cycle_result(self)
 
     def to_json_dict(self) -> dict[str, Any]:
+        validate_cycle_result(self)
         return {
-            "outcome": self.outcome,
+            "outcome": self.outcome.value,
             "spec_id": self.spec_id,
             "task_id": self.task_id,
             "base_sha": self.base_sha,
             "state": self.state.to_json_dict(),
             "scope": None if self.scope is None else self.scope.to_json_dict(),
             "validations": [record.to_json_dict() for record in self.validations],
-            "classification": None if self.classification is None else self.classification.value,
+            "classification": None if self.failure_class is None else self.failure_class.value,
             "repair_attempts": self.repair_attempts,
             "message": self.message,
+            "code": self.code,
         }
 
 
@@ -249,14 +376,9 @@ def _final_verify_if_ready(
         if persist_state:
             persist(root, current, cfg)
     if current.state is not ExecutionStatus.FINAL_VALIDATING:
-        return CycleResult(
-            outcome=current.state.value,
-            spec_id=spec.id,
-            task_id=None,
-            base_sha=None,
-            state=current,
-            repair_attempts=current.repair_attempts,
-            message="no selectable task",
+        raise AgentError.policy_violation(
+            f"cannot run final verification from {current.state.value}",
+            code="INVALID_TRANSITION",
         )
     emit(
         FINAL_VALIDATION_STARTED,
@@ -270,7 +392,7 @@ def _final_verify_if_ready(
         if persist_state:
             persist(root, current, cfg)
         return CycleResult(
-            outcome="FINAL_VERIFICATION_PASSED",
+            outcome=CycleOutcome.FINAL_VERIFICATION_PASSED,
             spec_id=spec.id,
             task_id=None,
             base_sha=None,
@@ -294,13 +416,13 @@ def _final_verify_if_ready(
     if persist_state:
         persist(root, current, cfg)
     return CycleResult(
-        outcome=target.value,
+        outcome=_as_cycle_outcome(target.value),
         spec_id=spec.id,
         task_id=None,
         base_sha=None,
         state=current,
         validations=records,
-        classification=classification,
+        failure_class=classification,
         repair_attempts=current.repair_attempts,
         message="final verification failed",
     )
@@ -373,13 +495,13 @@ def _after_codex(
         if persist_state:
             persist(root, state, cfg)
         return CycleResult(
-            outcome="SCOPE_VIOLATION",
+            outcome=CycleOutcome.SCOPE_VIOLATION,
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
             state=state,
             scope=scope,
-            classification=FailureClass.ESCALATION_REQUIRED,
+            failure_class=FailureClass.ESCALATION_REQUIRED,
             repair_attempts=state.repair_attempts,
             message=f"SCOPE_VIOLATION: {', '.join(scope.violation_paths)}",
         )
@@ -400,13 +522,13 @@ def _after_codex(
         if persist_state:
             persist(root, state, cfg)
         return CycleResult(
-            outcome=target.value,
+            outcome=_as_cycle_outcome(target.value),
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
             state=state,
             scope=scope,
-            classification=classification,
+            failure_class=classification,
             repair_attempts=state.repair_attempts,
             message="codex exited non-zero without in-scope changes",
         )
@@ -516,7 +638,7 @@ def _validate_and_maybe_repair(
             extra={"spec_task": task.id},
         )
         return CycleResult(
-            outcome="TASK_COMPLETED",
+            outcome=CycleOutcome.TASK_COMPLETED,
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
@@ -553,14 +675,14 @@ def _validate_and_maybe_repair(
         if persist_state:
             persist(root, state, cfg)
         return CycleResult(
-            outcome="FAILED",
+            outcome=CycleOutcome.FAILED,
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
             state=state,
             scope=scope,
             validations=records,
-            classification=classification,
+            failure_class=classification,
             repair_attempts=state.repair_attempts,
             message="environment failure is not sent to repair",
         )
@@ -576,14 +698,14 @@ def _validate_and_maybe_repair(
         if persist_state:
             persist(root, state, cfg)
         return CycleResult(
-            outcome="ESCALATED",
+            outcome=CycleOutcome.ESCALATED,
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
             state=state,
             scope=scope,
             validations=records,
-            classification=classification,
+            failure_class=classification,
             repair_attempts=state.repair_attempts,
             message="validation failure requires escalation",
         )
@@ -600,15 +722,16 @@ def _validate_and_maybe_repair(
         if persist_state:
             persist(root, state, cfg)
         return CycleResult(
-            outcome="ESCALATED",
+            outcome=CycleOutcome.ESCALATED,
             spec_id=spec.id,
             task_id=task.id,
             base_sha=base_sha,
             state=state,
             scope=scope,
             validations=records,
-            classification=classification,
+            failure_class=classification,
             repair_attempts=state.repair_attempts,
+            code=REPAIR_ATTEMPT_LIMIT,
             message="repair_attempt_limit reached",
         )
 
@@ -789,13 +912,14 @@ def _state_tampered_result(
         reason="STATE_TAMPERED",
     )
     return CycleResult(
-        outcome="SCOPE_VIOLATION",
+        outcome=CycleOutcome.SCOPE_VIOLATION,
         spec_id=spec.id,
         task_id=task.id,
         base_sha=base_sha,
         state=state,
         scope=scope,
-        classification=FailureClass.ESCALATION_REQUIRED,
+        failure_class=FailureClass.ESCALATION_REQUIRED,
         repair_attempts=state.repair_attempts,
+        code="STATE_TAMPERED",
         message=f"STATE_TAMPERED: {state_rel}",
     )

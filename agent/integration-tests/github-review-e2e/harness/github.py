@@ -300,7 +300,7 @@ def completed_review_run_for_terminal(
     if pr_head_sha != current_head or active:
         return None
     completed = [item for item in review_runs if str(item.get("status") or "") == "completed"]
-    if terminal not in {"READY_FOR_HUMAN", "ESCALATED", "FAILED"} or not completed:
+    if terminal not in PRODUCTION_TERMINAL_STATES or not completed:
         return None
     return sorted(
         completed,
@@ -327,6 +327,15 @@ def raise_if_prepare_fault(snapshot: dict[str, Any]) -> None:
 
 
 CODERABBIT_TERMINAL_KINDS = frozenset({KIND_COMPLETED, KIND_SKIPPED, KIND_FAILED, KIND_AMBIGUOUS})
+PRODUCTION_REVIEW_OUTCOMES = frozenset(
+    {
+        "IN_REVIEW",
+        "REVIEW_FIX_PUSHED",
+        "READY_FOR_HUMAN",
+        "FAILED",
+        "ESCALATED",
+    }
+)
 PRODUCTION_TERMINAL_STATES = frozenset({"READY_FOR_HUMAN", "ESCALATED", "FAILED"})
 
 

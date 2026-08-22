@@ -545,7 +545,7 @@ def _result_from_prepare(*, status: str, reason: str, request: ReviewRunRequest)
 
 def _result_from_review(result: ReviewResult, observations: ObservationLog) -> ReviewRunResult:
     return ReviewRunResult(
-        status=result.outcome,
+        status=result.outcome.value,
         reason=result.code or result.message,
         review_attempts=result.review_attempts,
         processed_identities=list(result.processed),

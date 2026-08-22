@@ -103,6 +103,18 @@ def assert_comment_did_not_start_review(runs: list[dict[str, Any]]) -> None:
     assert not started, f"Agent Review started from a comment event: {started}"
 
 
+PRODUCTION_REVIEW_OUTCOMES = frozenset(
+    {
+        "IN_REVIEW",
+        "REVIEW_FIX_PUSHED",
+        "READY_FOR_HUMAN",
+        "FAILED",
+        "ESCALATED",
+    }
+)
+PRODUCTION_TERMINAL_STATES = frozenset({"READY_FOR_HUMAN", "ESCALATED", "FAILED"})
+
+
 def terminal_state(pr: PullRequestEvidence) -> str | None:
     states = {
         "agent:ready": "READY_FOR_HUMAN",
@@ -111,6 +123,8 @@ def terminal_state(pr: PullRequestEvidence) -> str | None:
     }
     found = [value for label, value in states.items() if label in pr.labels]
     assert len(found) <= 1, f"multiple terminal labels on PR: {pr.labels}"
+    if found and found[0] not in PRODUCTION_REVIEW_OUTCOMES:
+        raise AssertionError(f"unknown Production outcome: {found[0]}")
     return found[0] if found else None
 
 
