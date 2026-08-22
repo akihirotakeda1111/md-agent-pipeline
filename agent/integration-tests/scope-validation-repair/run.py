@@ -216,8 +216,13 @@ def main():
             state = case / "state"
             state.mkdir(parents=True)
             shutil.copytree(here / "workspaces" / c["case"], workspace)
-            git_baseline(workspace, env)
             spec = here / "fixtures" / c["fixture"]
+            if c.get("work_unit"):
+                dest = workspace / "specs" / "tasks" / spec.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(spec, dest)
+                spec = dest
+            git_baseline(workspace, env)
             expected = json.loads(
                 (here / "expected" / c["case"] / "assertions.json").read_text(encoding="utf-8")
             )
