@@ -249,7 +249,16 @@ def _dummy_spec() -> TaskSpec:
 
 
 class FakeGithub:
-    def __init__(self, pull: dict, *, files: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        pull: dict,
+        *,
+        files: dict[str, str] | None = None,
+        fail_issue_labels: bool = False,
+        fail_issue_comments: bool = False,
+        comment_error: BaseException | None = None,
+        label_error: BaseException | None = None,
+    ) -> None:
         self.pull = pull
         self.files = dict(files or {})
         self.reviews: list[dict] = []
@@ -261,6 +270,10 @@ class FakeGithub:
         self.labels: set[str] = set()
         self.issue_labels: set[str] = set()
         self.next_id = 200
+        self.fail_issue_labels = fail_issue_labels
+        self.fail_issue_comments = fail_issue_comments
+        self.comment_error = comment_error
+        self.label_error = label_error
 
     def add_check_run(
         self,
@@ -369,10 +382,30 @@ class FakeGithub:
             self.labels.add(str(payload["name"]))
             return 201, payload
         if method == "POST" and path.endswith("/issues/7/labels"):
+            if self.fail_issue_labels:
+                if self.label_error is not None:
+                    raise self.label_error
+                raise HTTPError(
+                    url,
+                    500,
+                    "Server Error",
+                    hdrs={},
+                    fp=BytesIO(b'{"message":"label failed"}'),
+                )
             payload = json.loads(data or b"{}")
             self.issue_labels.update(str(name) for name in payload.get("labels", []))
             return 200, []
         if method == "POST" and path.endswith("/issues/7/comments"):
+            if self.fail_issue_comments:
+                if self.comment_error is not None:
+                    raise self.comment_error
+                raise HTTPError(
+                    url,
+                    500,
+                    "Server Error",
+                    hdrs={},
+                    fp=BytesIO(b'{"message":"comment failed"}'),
+                )
             payload = json.loads(data or b"{}")
             comment = {
                 "id": self.next_id,
@@ -1721,3 +1754,204 @@ def test_review_repair_does_not_reload_config(
     )
     assert result.outcome == "ESCALATED"
     assert result.code == "REVIEW_SCOPE_VIOLATION"
+
+
+def _json_events(capsys: pytest.CaptureFixture[str]) -> list[dict]:
+    return [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
+
+
+def test_run_review_missing_github_token_returns_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+    result = run_review(
+        repo_root=tmp_path,
+        pull_number=7,
+        head_sha_expected="abc",
+    )
+    records = _json_events(capsys)
+    names = [item["event"] for item in records]
+    assert result.outcome == "FAILED"
+    assert result.code == "MISSING_GITHUB_TOKEN"
+    assert result.failure_class is not None
+    assert result.failure_class.value == "ENVIRONMENT_FAILURE"
+    assert "FAILED" in names
+    assert "NOTIFICATION_FAILED" not in names
+    from agent.cli import EXIT_ENVIRONMENT, REVIEW_EXIT_CODES
+
+    assert REVIEW_EXIT_CODES[result.outcome] == EXIT_ENVIRONMENT
+
+
+def test_run_review_github_client_exception_returns_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom() -> None:
+        raise RuntimeError("client init failed")
+
+    monkeypatch.setattr("agent.review_loop.github_client_from_env", boom)
+    result = run_review(
+        repo_root=tmp_path,
+        pull_number=7,
+        head_sha_expected="abc",
+    )
+    names = [item["event"] for item in _json_events(capsys)]
+    assert result.outcome == "ESCALATED"
+    assert result.code == "INTERNAL_FAILURE"
+    assert "REVIEW_ESCALATED" in names
+    assert "NOTIFICATION_FAILED" not in names
+
+
+def test_control_plane_failure_accepts_missing_client(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent.review_loop import _control_plane_failure
+
+    result = _control_plane_failure(
+        None,
+        7,
+        None,
+        tmp_path,
+        load_config(),
+        AgentError.environment_failure("missing token", code="MISSING_GITHUB_TOKEN"),
+    )
+    names = [item["event"] for item in _json_events(capsys)]
+    assert result.outcome == "FAILED"
+    assert result.code == "MISSING_GITHUB_TOKEN"
+    assert "FAILED" in names
+    assert "NOTIFICATION_FAILED" not in names
+
+
+def test_review_keeps_escalated_when_status_label_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = "0" * 40
+    fake = FakeGithub(pull, fail_issue_labels=True)
+    result = _run(repo, fake)
+    records = _json_events(capsys)
+    names = [item["event"] for item in records]
+    assert result.outcome == "ESCALATED"
+    assert result.code == "PULL_HEAD_MISMATCH"
+    assert result.message
+    assert _escalation_notices(fake)
+    assert "agent:escalated" not in fake.issue_labels
+    assert names.index("REVIEW_ESCALATED") < names.index("NOTIFICATION_FAILED")
+    diagnostic = next(item for item in records if item["event"] == "NOTIFICATION_FAILED")
+    assert diagnostic["phase"] == "review"
+    assert diagnostic["primary_outcome"] == "ESCALATED"
+    assert diagnostic["primary_code"] == "PULL_HEAD_MISMATCH"
+    assert diagnostic["notification_operation"] == "apply_status_label"
+    assert diagnostic["notification_error_code"] == "GITHUB_API_FAILURE"
+
+
+def test_review_keeps_escalated_when_comment_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = "0" * 40
+    fake = FakeGithub(pull, fail_issue_comments=True)
+    result = _run(repo, fake)
+    records = _json_events(capsys)
+    names = [item["event"] for item in records]
+    assert result.outcome == "ESCALATED"
+    assert result.code == "PULL_HEAD_MISMATCH"
+    _assert_exclusive_issue_label(fake, "agent:escalated")
+    assert not _escalation_notices(fake)
+    assert "NOTIFICATION_FAILED" in names
+    diagnostic = next(item for item in records if item["event"] == "NOTIFICATION_FAILED")
+    assert diagnostic["notification_operation"] == "create_issue_comment"
+
+
+def test_review_keeps_failed_when_notification_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = ""
+    fake = FakeGithub(
+        pull,
+        fail_issue_labels=True,
+        fail_issue_comments=True,
+        comment_error=RuntimeError("comment transport exploded"),
+    )
+    result = _run(repo, fake)
+    records = _json_events(capsys)
+    names = [item["event"] for item in records]
+    assert result.outcome == "FAILED"
+    assert result.code == "GITHUB_API_FAILURE"
+    assert names.count("FAILED") == 1
+    assert names.index("FAILED") < names.index("NOTIFICATION_FAILED")
+    operations = [
+        item["notification_operation"] for item in records if item["event"] == "NOTIFICATION_FAILED"
+    ]
+    assert "apply_status_label" in operations
+    assert "create_issue_comment" in operations
+    assert {"GITHUB_API_FAILURE", "RuntimeError"} <= {
+        item["notification_error_code"]
+        for item in records
+        if item["event"] == "NOTIFICATION_FAILED"
+    }
+
+
+def test_review_notification_failure_does_not_rewrite_track(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = "0" * 40
+    fake = FakeGithub(pull, fail_issue_labels=True, fail_issue_comments=True)
+    track = empty_review_track(spec)
+    original = render_review_track(track)
+    fake.issue_comments.append(
+        {
+            "id": 9,
+            "body": original,
+            "user": {"login": "github-actions[bot]"},
+        }
+    )
+    result = _run(repo, fake)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "PULL_HEAD_MISMATCH"
+    assert result.review_attempts == 0
+    assert result.processed == ()
+    assert fake.issue_comments[0]["body"] == original
+    names = [item["event"] for item in _json_events(capsys)]
+    assert "NOTIFICATION_FAILED" in names
+    assert names.count("REVIEW_ESCALATED") == 1
+
+
+def test_review_diagnostic_emit_failure_still_returns_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent.events import NOTIFICATION_FAILED, emit
+
+    original = emit
+
+    def boom(event: str, message: str, **kwargs: object):
+        if event == NOTIFICATION_FAILED:
+            raise RuntimeError("diagnostic exploded")
+        return original(event, message, **kwargs)
+
+    monkeypatch.setattr("agent.events.emit", boom)
+    repo = _repo(tmp_path)
+    spec = _spec(repo)
+    pull = _pull(repo, spec)
+    pull["head"]["sha"] = "0" * 40
+    fake = FakeGithub(pull, fail_issue_comments=True)
+    result = _run(repo, fake)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "PULL_HEAD_MISMATCH"

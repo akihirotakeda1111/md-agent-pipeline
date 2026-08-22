@@ -48,5 +48,7 @@
   {"id":"F02","area":"failure-flow","title":"Production ESCALATED path comments labels payload and summary","test":"test_failure_notifications.py::test_production_unsafe_reconciliation_flow_escalates_comments_labels_and_summarizes"},
   {"id":"O01","area":"observability","title":"full new delivery uses contractual partial order","test":"test_observability.py::test_full_production_flow_uses_contractual_partial_event_order"},
   {"id":"O02","area":"observability","title":"full reuse flow omits new delivery events","test":"test_observability.py::test_full_production_reuse_flow_omits_new_delivery_events"},
-  {"id":"O03","area":"observability","title":"repair attempts accumulate across tasks","test":"test_job_summary.py::test_repair_attempts_accumulate_across_tasks_in_report_pr_and_summary"}
+  {"id":"O03","area":"observability","title":"repair attempts accumulate across tasks","test":"test_job_summary.py::test_repair_attempts_accumulate_across_tasks_in_report_pr_and_summary"},
+  {"id":"N01","area":"notification","title":"notification failure keeps escalated primary","test":"test_failure_notifications.py::test_notification_failure_keeps_escalated_primary"},
+  {"id":"N02","area":"notification","title":"PR lookup failure does not create issue","test":"test_failure_notifications.py::test_pr_lookup_failure_does_not_create_issue"}
 ]

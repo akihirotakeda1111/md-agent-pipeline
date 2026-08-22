@@ -218,3 +218,75 @@ def test_production_unsafe_reconciliation_flow_escalates_comments_labels_and_sum
     assert "@configured-reviewer" in payload
     assert result.reason and result.reason in result.summary
     assert "Escalation Reason" in result.summary
+
+
+def test_notification_failure_keeps_escalated_primary(
+    phase6_driver, spec_path, git_repo, service_factory, artifact_factory
+):
+    from agent.errors import AgentError
+
+    from .harness.observations import event_names
+
+    existing = github_fixture("existing-wrong-marker.json")
+    services = service_factory(github_responses={"list_pull_requests": [[existing], [existing]]})
+    services.github.fail(
+        "add_pr_comment",
+        AgentError.environment_failure("comment failed", code="GITHUB_API_FAILURE"),
+    )
+    result = phase6_driver.deliver(
+        delivery_request(spec_path, git_repo, artifact_factory(spec_path)),
+        services,
+    )
+    names = event_names(result.events or services.observations.events)
+    assert result.status.upper() == "ESCALATED"
+    assert result.reason == "WORK_UNIT_PR_MISMATCH"
+    assert result.summary
+    assert "WORK_UNIT_PR_MISMATCH" in result.summary
+    assert names.count("ESCALATED") == 1
+    assert names.count("WORKFLOW_COMPLETED") == 1
+    assert names.index("ESCALATED") < names.index("WORKFLOW_COMPLETED")
+    assert names.index("WORKFLOW_COMPLETED") < names.index("NOTIFICATION_FAILED")
+    assert services.github.calls("set_labels")
+    assert not services.github.calls("create_issue")
+    diagnostic = next(
+        item
+        for item in (result.events or services.observations.events)
+        if item.get("event") == "NOTIFICATION_FAILED"
+    )
+    assert diagnostic["primary_code"] == "WORK_UNIT_PR_MISMATCH"
+    assert diagnostic["notification_operation"] == "create_issue_comment"
+    assert diagnostic["notification_error_code"] == "GITHUB_API_FAILURE"
+
+
+def test_pr_lookup_failure_does_not_create_issue(
+    phase6_driver, spec_path, git_repo, service_factory, artifact_factory
+):
+    from agent.errors import AgentError
+
+    from .harness.observations import event_names
+
+    services = service_factory()
+    services.github.fail(
+        "list_pull_requests",
+        AgentError.environment_failure("timeout", code="GITHUB_API_TIMEOUT"),
+    )
+    result = phase6_driver.deliver(
+        delivery_request(
+            spec_path,
+            git_repo,
+            artifact_factory(spec_path, report_overrides={"spec_id": "wrong"}),
+        ),
+        services,
+    )
+    names = event_names(result.events or services.observations.events)
+    assert result.status.upper() == "ESCALATED"
+    assert result.reason == "SPEC_IDENTITY_MISMATCH"
+    assert not services.github.calls("create_issue")
+    assert "NOTIFICATION_FAILED" in names
+    diagnostic = next(
+        item
+        for item in (result.events or services.observations.events)
+        if item.get("event") == "NOTIFICATION_FAILED"
+    )
+    assert diagnostic["notification_operation"] == "list_open_pulls"
+    assert diagnostic["primary_code"] == "SPEC_IDENTITY_MISMATCH"

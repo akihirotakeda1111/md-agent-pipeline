@@ -428,6 +428,75 @@ class _FakeGitHub:
         return {"id": 1}
 
 
+def _json_events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    return [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
+
+
+def _event_names(records: list[dict[str, object]]) -> list[str]:
+    return [str(item["event"]) for item in records]
+
+
+class _NotifyGitHub(_FakeGitHub):
+    def __init__(
+        self,
+        pulls: list[dict[str, object]] | None = None,
+        *,
+        fail_comment: bool = False,
+        fail_label: bool = False,
+        fail_issue: bool = False,
+        fail_list: bool = False,
+        comment_error: BaseException | None = None,
+        label_error: BaseException | None = None,
+        issue_error: BaseException | None = None,
+        list_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(pulls)
+        self.fail_comment = fail_comment
+        self.fail_label = fail_label
+        self.fail_issue = fail_issue
+        self.fail_list = fail_list
+        self.comment_error = comment_error
+        self.label_error = label_error
+        self.issue_error = issue_error
+        self.list_error = list_error
+
+    def list_open_pulls(self, *, head_branch: str) -> list[dict[str, object]]:
+        if self.fail_list:
+            raise self.list_error or AgentError.environment_failure(
+                "pull lookup failed",
+                code="GITHUB_API_TIMEOUT",
+            )
+        return super().list_open_pulls(head_branch=head_branch)
+
+    def add_issue_labels(self, issue_number: int, labels: list[str]) -> None:
+        if self.fail_label:
+            raise self.label_error or AgentError.environment_failure(
+                "label failed",
+                code="GITHUB_API_TIMEOUT",
+            )
+        super().add_issue_labels(issue_number, labels)
+
+    def create_issue(
+        self, *, title: str, body: str, labels: list[str] | None = None
+    ) -> dict[str, object]:
+        if self.fail_issue:
+            raise self.issue_error or AgentError.environment_failure(
+                "issue failed",
+                code="GITHUB_API_FAILURE",
+            )
+        return super().create_issue(title=title, body=body, labels=labels)
+
+    def create_issue_comment(self, issue_number: int, body: str) -> dict[str, object]:
+        if self.fail_comment:
+            raise self.comment_error or AgentError.environment_failure(
+                "comment failed Authorization: Bearer secret-token-value",
+                code="GITHUB_API_FAILURE",
+            )
+        return super().create_issue_comment(issue_number, body)
+
+
 def test_reconcile_open_pull_reuses_same_work_unit_only() -> None:
     from agent.reconcile import reconcile_open_pull
 
@@ -1250,3 +1319,379 @@ def test_deliver_semantic_guard_rejects_starstar_allowed(tmp_path: Path) -> None
             summary_path=tmp_path / "summary.md",
         )
     assert exc_info.value.code == "INVALID_SPEC"
+
+
+def _failed_report_delivery(
+    tmp_path: Path,
+    *,
+    outcome: str,
+    code: str,
+    message: str,
+):
+    spec = _bound_example_spec(tmp_path)
+    report_dir = tmp_path / "report"
+    _bind_report(
+        report_dir,
+        _report(spec=spec, outcome=outcome, code=code, message=message),
+    )
+    return spec, report_dir
+
+
+@pytest.mark.parametrize(
+    ("fail_comment", "fail_label"),
+    [
+        (True, False),
+        (False, True),
+    ],
+)
+def test_delivery_keeps_escalated_when_pr_notification_fails(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    fail_comment: bool,
+    fail_label: bool,
+) -> None:
+    from agent.delivery import run_delivery
+
+    spec = _bound_example_spec(tmp_path)
+    report_dir = tmp_path / "report"
+    _bind_report(report_dir, _report(spec=spec, spec_id="other-spec"))
+    github = _NotifyGitHub(
+        pulls=[{"number": 7, "html_url": "https://example.test/pull/7"}],
+        fail_comment=fail_comment,
+        fail_label=fail_label,
+    )
+    summary_path = tmp_path / "summary.md"
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=summary_path,
+    )
+    assert result.outcome == "ESCALATED"
+    assert result.code == "SPEC_IDENTITY_MISMATCH"
+    assert "other-spec" in result.message or "does not match" in result.message
+    assert result.summary
+    assert summary_path.is_file()
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "SPEC_IDENTITY_MISMATCH" in summary
+    assert result.summary == summary
+    records = _json_events(capsys)
+    names = _event_names(records)
+    assert names.count("ESCALATED") == 1
+    assert names.count("WORKFLOW_COMPLETED") == 1
+    assert "NOTIFICATION_FAILED" in names
+    assert names.index("ESCALATED") < names.index("WORKFLOW_COMPLETED")
+    assert names.index("WORKFLOW_COMPLETED") < names.index("NOTIFICATION_FAILED")
+    dumped = json.dumps(records)
+    assert "secret-token-value" not in dumped
+    diagnostic = next(item for item in records if item["event"] == "NOTIFICATION_FAILED")
+    assert diagnostic["phase"] == "delivery"
+    assert diagnostic["primary_outcome"] == "ESCALATED"
+    assert diagnostic["primary_code"] == "SPEC_IDENTITY_MISMATCH"
+    if fail_comment:
+        assert diagnostic["notification_operation"] == "create_issue_comment"
+        assert "agent:escalated" in github.labels.get("issue:7", {}).get("labels", "")
+    if fail_label:
+        assert any(
+            item.get("event") == "NOTIFICATION_FAILED"
+            and item.get("notification_operation") == "apply_status_label"
+            for item in records
+        )
+        assert github.comments
+
+
+def test_delivery_report_failure_helpers_do_not_emit_or_notify(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agent.config import load_config
+    from agent.delivery import _failure_result, _report_failure
+    from agent.policy import classify_control_plane_error
+
+    spec = _bound_example_spec()
+    report = _report(spec=spec, outcome="FAILED", code="GIT_FAILED", message="down")
+    reported = _report_failure(spec, report, load_config())
+    failed = _failure_result(
+        spec,
+        report,
+        AgentError.environment_failure("down", code="GIT_FAILED"),
+        classify_control_plane_error(AgentError.environment_failure("down", code="GIT_FAILED")),
+        load_config(),
+    )
+    names = _event_names(_json_events(capsys))
+    assert reported.outcome == "FAILED"
+    assert failed.outcome == "FAILED"
+    assert "FAILED" not in names
+    assert "ESCALATED" not in names
+    assert "NOTIFICATION_FAILED" not in names
+
+
+def test_delivery_successful_notification_does_not_emit_diagnostic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent.delivery import run_delivery
+
+    spec, report_dir = _failed_report_delivery(
+        tmp_path, outcome="FAILED", code="GIT_FAILED", message="down"
+    )
+    github = _NotifyGitHub()
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    names = _event_names(_json_events(capsys))
+    assert result.outcome == "FAILED"
+    assert github.issues
+    assert "NOTIFICATION_FAILED" not in names
+    assert names.count("FAILED") == 1
+
+
+def test_delivery_pr_lookup_failure_does_not_create_issue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent.delivery import run_delivery
+
+    spec = _bound_example_spec(tmp_path)
+    report_dir = tmp_path / "report"
+    _bind_report(report_dir, _report(spec=spec, spec_id="other-spec"))
+    github = _NotifyGitHub(fail_list=True)
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    records = _json_events(capsys)
+    names = _event_names(records)
+    assert result.outcome == "ESCALATED"
+    assert result.code == "SPEC_IDENTITY_MISMATCH"
+    assert github.issues == []
+    assert "NOTIFICATION_FAILED" in names
+    diagnostic = next(item for item in records if item["event"] == "NOTIFICATION_FAILED")
+    assert diagnostic["notification_operation"] == "list_open_pulls"
+    assert diagnostic["notification_error_code"] == "GITHUB_API_TIMEOUT"
+    assert diagnostic["primary_code"] == "SPEC_IDENTITY_MISMATCH"
+
+
+def test_delivery_issue_failure_keeps_primary_result(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent.delivery import run_delivery
+
+    spec, report_dir = _failed_report_delivery(
+        tmp_path, outcome="FAILED", code="GIT_FAILED", message="down"
+    )
+    github = _NotifyGitHub(fail_issue=True)
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    names = _event_names(_json_events(capsys))
+    assert result.outcome == "FAILED"
+    assert result.code == "GIT_FAILED"
+    assert github.issues == []
+    assert "NOTIFICATION_FAILED" in names
+
+
+def test_delivery_notifies_known_pr_number_without_lookup() -> None:
+    from agent.config import load_config
+    from agent.delivery import DeliveryOutcome, DeliveryResult, _notify_best_effort
+    from agent.notify import EscalationNotice
+
+    spec = _bound_example_spec()
+    github = _NotifyGitHub(fail_list=True)
+    result = DeliveryResult(
+        outcome=DeliveryOutcome.ESCALATED,
+        pr_url=None,
+        pr_number=9,
+        commit_sha=None,
+        notice=EscalationNotice(
+            task_id=spec.id,
+            current_task=None,
+            reason="mismatch",
+            last_validation=None,
+            repair_attempts=0,
+            required_human_action="inspect",
+        ),
+        summary="",
+        message="mismatch",
+        code="WORK_UNIT_PR_MISMATCH",
+        failure_class=FailureClass.ESCALATION_REQUIRED,
+    )
+    _notify_best_effort(github, spec, result, load_config())  # type: ignore[arg-type]
+    assert github.comments == [(9, result.notice.to_markdown())]  # type: ignore[union-attr]
+    assert github.issues == []
+
+
+def test_delivery_failed_notification_keeps_failed_outcome() -> None:
+    from agent.config import load_config
+    from agent.delivery import DeliveryOutcome, DeliveryResult, _notify_best_effort
+    from agent.notify import EscalationNotice
+
+    spec = _bound_example_spec()
+    github = _NotifyGitHub(fail_comment=True)
+    result = DeliveryResult(
+        outcome=DeliveryOutcome.FAILED,
+        pr_url=None,
+        pr_number=9,
+        commit_sha=None,
+        notice=EscalationNotice(
+            task_id=spec.id,
+            current_task=None,
+            reason="down",
+            last_validation=None,
+            repair_attempts=0,
+            required_human_action="retry",
+        ),
+        summary="already rendered",
+        message="down",
+        code="GIT_FAILED",
+        failure_class=FailureClass.ENVIRONMENT_FAILURE,
+    )
+    _notify_best_effort(github, spec, result, load_config())  # type: ignore[arg-type]
+    assert result.outcome == DeliveryOutcome.FAILED
+    assert result.code == "GIT_FAILED"
+    assert result.message == "down"
+    assert result.summary == "already rendered"
+    assert "agent:failed" in github.labels.get("issue:9", {}).get("labels", "")
+    assert github.comments == []
+
+
+def test_delivery_comment_failure_still_applies_label(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent.delivery import run_delivery
+
+    spec, report_dir = _failed_report_delivery(
+        tmp_path, outcome="ESCALATED", code="WORK_UNIT_PR_MISMATCH", message="mismatch"
+    )
+    github = _NotifyGitHub(
+        pulls=[{"number": 7, "html_url": "https://example.test/pull/7"}],
+        fail_comment=True,
+        comment_error=RuntimeError("transport exploded"),
+    )
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    records = _json_events(capsys)
+    assert result.outcome == "ESCALATED"
+    assert "agent:escalated" in github.labels.get("issue:7", {}).get("labels", "")
+    diagnostic = next(item for item in records if item["event"] == "NOTIFICATION_FAILED")
+    assert diagnostic["notification_error_code"] == "RuntimeError"
+
+
+def test_delivery_missing_github_client_keeps_primary_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.delivery import run_delivery
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+    spec, report_dir = _failed_report_delivery(
+        tmp_path, outcome="ESCALATED", code="WORK_UNIT_PR_MISMATCH", message="mismatch"
+    )
+    summary_path = tmp_path / "summary.md"
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        summary_path=summary_path,
+    )
+    names = _event_names(_json_events(capsys))
+    assert result.outcome == "FAILED"
+    assert result.code == "MISSING_GITHUB_TOKEN"
+    assert summary_path.is_file()
+    assert "MISSING_GITHUB_TOKEN" in result.summary
+    assert "FAILED" in names
+    assert "WORKFLOW_COMPLETED" in names
+    assert "NOTIFICATION_FAILED" not in names
+
+
+def test_delivery_diagnostic_emit_failure_still_returns_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.delivery import run_delivery
+    from agent.events import NOTIFICATION_FAILED, emit
+
+    original = emit
+
+    def boom(event: str, message: str, **kwargs: object):
+        if event == NOTIFICATION_FAILED:
+            raise RuntimeError("diagnostic exploded")
+        return original(event, message, **kwargs)
+
+    monkeypatch.setattr("agent.events.emit", boom)
+    spec, report_dir = _failed_report_delivery(
+        tmp_path, outcome="FAILED", code="GIT_FAILED", message="down"
+    )
+    github = _NotifyGitHub(fail_issue=True)
+    result = run_delivery(
+        spec,
+        repo_root=tmp_path,
+        report_dir=report_dir,
+        github=github,  # type: ignore[arg-type]
+        summary_path=tmp_path / "summary.md",
+    )
+    assert result.outcome == "FAILED"
+    assert result.code == "GIT_FAILED"
+    assert result.summary
+
+
+def test_notification_failed_event_keeps_primary_and_notification_codes() -> None:
+    from agent.events import (
+        _MAX_DIAGNOSTIC_VALUE,
+        _bounded_diagnostic_text,
+        emit_notification_failed,
+    )
+
+    secret = "secret-token"
+    record = emit_notification_failed(
+        phase="delivery",
+        task_id="example-task",
+        primary_outcome="ESCALATED",
+        primary_code="WORK_UNIT_PR_MISMATCH",
+        operation="create_issue_comment",
+        error=AgentError.environment_failure("comment failed", code="GITHUB_API_FAILURE"),
+        message=f"Authorization: Bearer {secret}",
+    )
+    dumped = json.dumps(record)
+    assert record["event"] == "NOTIFICATION_FAILED"
+    assert record["phase"] == "delivery"
+    assert record["primary_outcome"] == "ESCALATED"
+    assert record["primary_code"] == "WORK_UNIT_PR_MISMATCH"
+    assert record["notification_operation"] == "create_issue_comment"
+    assert record["notification_error_code"] == "GITHUB_API_FAILURE"
+    assert secret not in dumped
+    assert secret not in record["message"]
+    assert "[redacted]" in record["message"]
+    assert _bounded_diagnostic_text(f"Bearer {secret}") == "Bearer [redacted]"
+    assert _bounded_diagnostic_text(f"token={secret}") == "token=[redacted]"
+    padded = ("n" * 200) + f" Authorization: Bearer {secret} " + ("z" * 200)
+    bounded = emit_notification_failed(
+        phase="delivery",
+        task_id="example-task",
+        primary_outcome="ESCALATED",
+        primary_code="WORK_UNIT_PR_MISMATCH",
+        operation="x" * 500,
+        error=AgentError.environment_failure("x", code="GITHUB_API_FAILURE"),
+        message=padded,
+    )
+    bounded_dump = json.dumps(bounded)
+    assert secret not in bounded_dump
+    assert len(bounded["message"]) <= _MAX_DIAGNOSTIC_VALUE
+    assert len(str(bounded["notification_operation"])) <= _MAX_DIAGNOSTIC_VALUE

@@ -23,6 +23,7 @@ from agent.events import (
     PR_CREATED,
     WORKFLOW_COMPLETED,
     emit,
+    emit_notification_failed_best_effort,
 )
 from agent.github_api import GitHubClient, github_client_from_env
 from agent.gitutil import (
@@ -260,12 +261,12 @@ def run_delivery(
     except Exception as exc:
         classification = classify_control_plane_error(exc)
         result = _failure_result(parsed, report, exc, classification, cfg)
-        _notify(client, parsed, result, cfg)
     markdown = _summary_markdown(parsed, report, result)
     target = summary_path or os.environ.get("GITHUB_STEP_SUMMARY")
     if target:
         write_github_summary(target, markdown)
     result.summary = markdown
+    _emit_delivery_terminal(result, parsed, report)
     emit(
         WORKFLOW_COMPLETED,
         result.message,
@@ -273,6 +274,8 @@ def run_delivery(
         state=report.state.state.value,
         extra={"outcome": result.outcome.value},
     )
+    if result.outcome in {DeliveryOutcome.FAILED, DeliveryOutcome.ESCALATED}:
+        _notify_best_effort(client, parsed, result, cfg)
     return result
 
 
@@ -305,7 +308,7 @@ def _deliver(
         )
 
     if report.outcome is not WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
-        return _report_failure(spec, report, cfg, github)
+        return _report_failure(spec, report, cfg)
 
     assert_pr_allowed(report)
     checkout_delivery_parent(root, spec.target_branch, report.base_sha)
@@ -408,7 +411,6 @@ def _report_failure(
     spec: TaskSpec,
     report: WorkUnitReport,
     cfg: AgentConfig,
-    github: GitHubClient,
 ) -> DeliveryResult:
     classification = FailureClass.ESCALATION_REQUIRED
     if report.outcome is WorkUnitOutcome.FAILED:
@@ -421,7 +423,7 @@ def _report_failure(
         if classification is FailureClass.ENVIRONMENT_FAILURE
         else DeliveryOutcome.ESCALATED
     )
-    result = DeliveryResult(
+    return DeliveryResult(
         outcome=outcome,
         pr_url=None,
         pr_number=None,
@@ -432,10 +434,6 @@ def _report_failure(
         code=report.code,
         failure_class=classification,
     )
-    _notify(github, spec, result, cfg)
-    event = FAILED if result.outcome is DeliveryOutcome.FAILED else ESCALATED
-    emit(event, report.message, task_id=spec.id, state=report.state.state.value)
-    return result
 
 
 def _failure_result(
@@ -450,8 +448,6 @@ def _failure_result(
         if classification is FailureClass.ENVIRONMENT_FAILURE
         else DeliveryOutcome.ESCALATED
     )
-    event = FAILED if outcome is DeliveryOutcome.FAILED else ESCALATED
-    emit(event, str(error), task_id=spec.id, state=report.state.state.value)
     code = error.code if isinstance(error, AgentError) else None
     return DeliveryResult(
         outcome=outcome,
@@ -489,7 +485,24 @@ def _notice_from_report(
     )
 
 
-def _notify(
+def _emit_delivery_terminal(result: DeliveryResult, spec: TaskSpec, report: WorkUnitReport) -> None:
+    if result.outcome is DeliveryOutcome.FAILED:
+        event = FAILED
+    elif result.outcome is DeliveryOutcome.ESCALATED:
+        event = ESCALATED
+    else:
+        return
+    extra = None if result.code is None else {"code": result.code}
+    emit(
+        event,
+        result.message,
+        task_id=spec.id,
+        state=report.state.state.value,
+        extra=extra,
+    )
+
+
+def _notify_best_effort(
     github: GitHubClient | None,
     spec: TaskSpec,
     result: DeliveryResult,
@@ -497,22 +510,95 @@ def _notify(
 ) -> None:
     if result.notice is None or github is None:
         return
-    body = result.notice.to_markdown()
-    label = "agent:failed" if result.outcome is DeliveryOutcome.FAILED else "agent:escalated"
-    if result.pr_number is not None:
-        github.create_issue_comment(result.pr_number, body)
-        apply_status_label(github, result.pr_number, label)
-        return
-    existing = github.list_open_pulls(head_branch=spec.target_branch)
-    if existing:
-        number = int(existing[0]["number"])
+    try:
+        body = result.notice.to_markdown()
+        label = "agent:failed" if result.outcome is DeliveryOutcome.FAILED else "agent:escalated"
+        if result.pr_number is not None:
+            _notify_pull_best_effort(github, result.pr_number, body, label, spec, result)
+            return
+        existing = _list_open_pulls_best_effort(github, spec, result)
+        if existing is None:
+            return
+        if existing:
+            number = int(existing[0]["number"])
+            _notify_pull_best_effort(github, number, body, label, spec, result)
+            return
+        _create_issue_best_effort(github, spec, result, body, label)
+    except Exception as exc:
+        _emit_delivery_notification_failed(
+            "notify", spec.id, result.outcome.value, result.code, exc
+        )
+
+
+def _notify_pull_best_effort(
+    github: GitHubClient,
+    number: int,
+    body: str,
+    label: str,
+    spec: TaskSpec,
+    result: DeliveryResult,
+) -> None:
+    try:
         github.create_issue_comment(number, body)
+    except Exception as exc:
+        _emit_delivery_notification_failed(
+            "create_issue_comment", spec.id, result.outcome.value, result.code, exc
+        )
+    try:
         apply_status_label(github, number, label)
-        return
-    github.create_issue(
-        title=f"{spec.id}: agent {result.outcome.value.lower()}",
-        body=body,
-        labels=[label],
+    except Exception as exc:
+        _emit_delivery_notification_failed(
+            "apply_status_label", spec.id, result.outcome.value, result.code, exc
+        )
+
+
+def _list_open_pulls_best_effort(
+    github: GitHubClient,
+    spec: TaskSpec,
+    result: DeliveryResult,
+) -> list[dict[str, Any]] | None:
+    try:
+        return github.list_open_pulls(head_branch=spec.target_branch)
+    except Exception as exc:
+        _emit_delivery_notification_failed(
+            "list_open_pulls", spec.id, result.outcome.value, result.code, exc
+        )
+        return None
+
+
+def _create_issue_best_effort(
+    github: GitHubClient,
+    spec: TaskSpec,
+    result: DeliveryResult,
+    body: str,
+    label: str,
+) -> None:
+    try:
+        github.create_issue(
+            title=f"{spec.id}: agent {result.outcome.value.lower()}",
+            body=body,
+            labels=[label],
+        )
+    except Exception as exc:
+        _emit_delivery_notification_failed(
+            "create_issue", spec.id, result.outcome.value, result.code, exc
+        )
+
+
+def _emit_delivery_notification_failed(
+    operation: str,
+    task_id: str,
+    primary_outcome: str,
+    primary_code: str | None,
+    error: BaseException,
+) -> None:
+    emit_notification_failed_best_effort(
+        phase="delivery",
+        task_id=task_id,
+        primary_outcome=primary_outcome,
+        primary_code=primary_code,
+        operation=operation,
+        error=error,
     )
 
 

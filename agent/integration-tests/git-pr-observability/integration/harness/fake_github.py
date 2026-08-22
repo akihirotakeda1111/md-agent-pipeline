@@ -14,9 +14,16 @@ class FakeGitHub:
     ) -> None:
         self.observations = observations
         self.responses = {name: list(values) for name, values in (responses or {}).items()}
+        self.failures: dict[str, BaseException] = {}
+
+    def fail(self, operation: str, error: BaseException) -> None:
+        self.failures[operation] = error
 
     def request(self, operation: str, **payload: Any) -> Any:
         self.observations.github_call(operation, payload)
+        error = self.failures.get(operation)
+        if error is not None:
+            raise error
         queue = self.responses.get(operation, [])
         return deepcopy(queue.pop(0)) if queue else None
 
