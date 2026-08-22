@@ -7,6 +7,14 @@ from enum import StrEnum
 from typing import Any
 
 
+class ReviewOutcome(StrEnum):
+    IN_REVIEW = "IN_REVIEW"
+    REVIEW_FIX_PUSHED = "REVIEW_FIX_PUSHED"
+    READY_FOR_HUMAN = "READY_FOR_HUMAN"
+    FAILED = "FAILED"
+    ESCALATED = "ESCALATED"
+
+
 class ReviewClassification(StrEnum):
     ACTIONABLE = "ACTIONABLE"
     NON_ACTIONABLE = "NON_ACTIONABLE"

@@ -12,11 +12,12 @@ from typing import Any
 
 from agent.codex_runner import resolve_task, run_codex
 from agent.config import load_config
-from agent.cycle import run_task_cycle
-from agent.delivery import run_delivery
+from agent.cycle import CycleOutcome, run_task_cycle
+from agent.delivery import DeliveryOutcome, run_delivery
 from agent.errors import AgentError, ErrorCategory, error_category_of
 from agent.gitutil import capture_snapshot, collect_changes
 from agent.intake import evaluate_intake, prepare_execute, write_github_output
+from agent.review_types import ReviewOutcome
 from agent.scope import check_scope
 from agent.select import select_next_task
 from agent.spec import parse_spec, spec_to_dict
@@ -29,13 +30,41 @@ from agent.state import (
     write_state,
 )
 from agent.validation import run_validation_text
-from agent.workunit import run_work_unit
+from agent.workunit import WorkUnitOutcome, run_work_unit
 
 EXIT_OK = 0
 EXIT_ENVIRONMENT = 1
 EXIT_INVALID = 2
 EXIT_POLICY = 3
 EXIT_INTERNAL = 4
+
+CYCLE_EXIT_CODES = {
+    CycleOutcome.TASK_COMPLETED: EXIT_OK,
+    CycleOutcome.FINAL_VERIFICATION_PASSED: EXIT_OK,
+    CycleOutcome.SCOPE_VIOLATION: EXIT_POLICY,
+    CycleOutcome.FAILED: EXIT_INVALID,
+    CycleOutcome.ESCALATED: EXIT_INVALID,
+}
+WORK_UNIT_EXIT_CODES = {
+    WorkUnitOutcome.FINAL_VERIFICATION_PASSED: EXIT_OK,
+    WorkUnitOutcome.SCOPE_VIOLATION: EXIT_POLICY,
+    WorkUnitOutcome.FAILED: EXIT_ENVIRONMENT,
+    WorkUnitOutcome.ESCALATED: EXIT_INVALID,
+    WorkUnitOutcome.INVALID_SPEC: EXIT_INVALID,
+    WorkUnitOutcome.COMPLETED: EXIT_INVALID,
+}
+DELIVERY_EXIT_CODES = {
+    DeliveryOutcome.PR_CREATED: EXIT_OK,
+    DeliveryOutcome.FAILED: EXIT_ENVIRONMENT,
+    DeliveryOutcome.ESCALATED: EXIT_POLICY,
+}
+REVIEW_EXIT_CODES = {
+    ReviewOutcome.IN_REVIEW: EXIT_OK,
+    ReviewOutcome.REVIEW_FIX_PUSHED: EXIT_OK,
+    ReviewOutcome.READY_FOR_HUMAN: EXIT_OK,
+    ReviewOutcome.FAILED: EXIT_ENVIRONMENT,
+    ReviewOutcome.ESCALATED: EXIT_POLICY,
+}
 
 
 def _print_json(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
@@ -326,15 +355,12 @@ def run_task(argv: Sequence[str] | None = None) -> int:
         result = run_task_cycle(args.spec, repo_root=args.repo_root)
         _print_json(
             {
-                "ok": result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"},
+                "ok": result.outcome
+                in {CycleOutcome.TASK_COMPLETED, CycleOutcome.FINAL_VERIFICATION_PASSED},
                 **result.to_json_dict(),
             }
         )
-        if result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
-            return EXIT_OK
-        if result.outcome == "SCOPE_VIOLATION":
-            return EXIT_POLICY
-        return EXIT_INVALID
+        return CYCLE_EXIT_CODES[result.outcome]
     except Exception as exc:
         return _exit_for_error(exc)
 
@@ -351,17 +377,11 @@ def run_work_unit_cli(argv: Sequence[str] | None = None) -> int:
         report = run_work_unit(args.spec, repo_root=args.repo_root, report_dir=args.report_dir)
         _print_json(
             {
-                "ok": report.final_verification_passed,
+                "ok": report.outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED,
                 **report.to_json_dict(),
             }
         )
-        if report.outcome == "FINAL_VERIFICATION_PASSED":
-            return EXIT_OK
-        if report.outcome == "SCOPE_VIOLATION":
-            return EXIT_POLICY
-        if report.outcome == "FAILED":
-            return EXIT_ENVIRONMENT
-        return EXIT_INVALID
+        return WORK_UNIT_EXIT_CODES[report.outcome]
     except Exception as exc:
         return _exit_for_error(exc)
 
@@ -376,12 +396,8 @@ def run_deliver_cli(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = run_delivery(args.spec, repo_root=args.repo_root, report_dir=args.report_dir)
-        _print_json({"ok": result.outcome == "PR_CREATED", **result.to_json_dict()})
-        if result.outcome == "PR_CREATED":
-            return EXIT_OK
-        if result.outcome == "FAILED":
-            return EXIT_ENVIRONMENT
-        return EXIT_POLICY
+        _print_json({"ok": result.outcome is DeliveryOutcome.PR_CREATED, **result.to_json_dict()})
+        return DELIVERY_EXIT_CODES[result.outcome]
     except Exception as exc:
         return _exit_for_error(exc)
 
@@ -445,17 +461,18 @@ def run_review_cli(argv: Sequence[str] | None = None) -> int:
             head_sha_expected=args.head_sha,
             spec_path=spec_path,
         )
+        success = {
+            ReviewOutcome.READY_FOR_HUMAN,
+            ReviewOutcome.REVIEW_FIX_PUSHED,
+            ReviewOutcome.IN_REVIEW,
+        }
         _print_json(
             {
-                "ok": result.outcome in {"READY_FOR_HUMAN", "REVIEW_FIX_PUSHED", "IN_REVIEW"},
+                "ok": result.outcome in success,
                 **result.to_json_dict(),
             }
         )
-        if result.outcome in {"READY_FOR_HUMAN", "REVIEW_FIX_PUSHED", "IN_REVIEW"}:
-            return EXIT_OK
-        if result.outcome == "FAILED":
-            return EXIT_ENVIRONMENT
-        return EXIT_POLICY
+        return REVIEW_EXIT_CODES[result.outcome]
     except Exception as exc:
         return _exit_for_error(exc)
 

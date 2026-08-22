@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://md-agent-pipeline.local/schemas/work-unit-report.schema.json",
+  "title": "Work Unit Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "spec_id",
+    "spec_path",
+    "spec_sha256",
+    "base_sha",
+    "branch",
+    "state",
+    "completed_tasks",
+    "changed_files",
+    "validation_results",
+    "repair_attempts",
+    "final_verification_passed",
+    "validation_passed",
+    "scope_allowed",
+    "message",
+    "classification",
+    "code",
+    "current_task",
+    "skip_reason",
+    "patch_file",
+    "patch_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "FINAL_VERIFICATION_PASSED",
+        "FAILED",
+        "ESCALATED",
+        "SCOPE_VIOLATION",
+        "INVALID_SPEC",
+        "COMPLETED"
+      ]
+    },
+    "spec_id": { "type": "string" },
+    "spec_path": { "type": "string" },
+    "spec_sha256": {
+      "type": "string",
+      "pattern": "^(?:[a-fA-F0-9]{64})?$"
+    },
+    "base_sha": {
+      "type": "string",
+      "pattern": "^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})?$"
+    },
+    "branch": { "type": "string" },
+    "state": { "type": "object" },
+    "completed_tasks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "changed_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "validation_results": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "repair_attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "final_verification_passed": { "type": "boolean" },
+    "validation_passed": { "type": "boolean" },
+    "scope_allowed": { "type": "boolean" },
+    "message": { "type": "string" },
+    "classification": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "enum": [
+            "AGENT_REPAIRABLE",
+            "ENVIRONMENT_FAILURE",
+            "ESCALATION_REQUIRED"
+          ]
+        }
+      ]
+    },
+    "code": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    },
+    "current_task": {
+      "anyOf": [{ "type": "null" }, { "type": "string" }]
+    },
+    "skip_reason": {
+      "anyOf": [{ "type": "null" }, { "type": "string" }]
+    },
+    "patch_file": { "type": "string" },
+    "patch_sha256": {
+      "type": "string",
+      "pattern": "^(?:[a-fA-F0-9]{64})?$"
+    }
+  }
+}

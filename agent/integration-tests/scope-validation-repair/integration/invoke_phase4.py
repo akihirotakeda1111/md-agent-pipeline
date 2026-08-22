@@ -47,35 +47,63 @@ def _safe_env() -> dict[str, str]:
     return env
 
 
-def _class_value(classification) -> str | None:
+def _class_value(result) -> str | None:
+    classification = getattr(result, "failure_class", None)
+    if classification is None:
+        classification = getattr(result, "classification", None)
     if classification is None:
         return None
     return classification.value if hasattr(classification, "value") else str(classification)
 
 
+def _outcome_value(result) -> str:
+    outcome = result.outcome
+    return outcome.value if hasattr(outcome, "value") else str(outcome)
+
+
+PRODUCTION_CYCLE_OUTCOMES = {
+    "TASK_COMPLETED",
+    "FINAL_VERIFICATION_PASSED",
+    "FAILED",
+    "ESCALATED",
+    "SCOPE_VIOLATION",
+}
+PRODUCTION_WORK_UNIT_OUTCOMES = {
+    "FINAL_VERIFICATION_PASSED",
+    "FAILED",
+    "ESCALATED",
+    "SCOPE_VIOLATION",
+    "INVALID_SPEC",
+    "COMPLETED",
+}
+
+
 def _status(result) -> str:
     from agent.classify import FailureClass
 
-    class_value = _class_value(result.classification)
-    if result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
+    class_value = _class_value(result)
+    outcome = _outcome_value(result)
+    if outcome not in PRODUCTION_CYCLE_OUTCOMES and outcome not in PRODUCTION_WORK_UNIT_OUTCOMES:
+        return outcome
+    if outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
         return "PASS"
-    if result.outcome == "SCOPE_VIOLATION":
+    if outcome == "SCOPE_VIOLATION":
         return "SCOPE_VIOLATION"
-    if result.outcome == "FAILED" and class_value == FailureClass.ENVIRONMENT_FAILURE.value:
+    if outcome == "FAILED" and class_value == FailureClass.ENVIRONMENT_FAILURE.value:
         return "ENVIRONMENT_FAILURE"
-    if result.outcome == "ESCALATED":
+    if outcome == "ESCALATED":
         return "ESCALATION_REQUIRED"
-    return result.outcome
+    return outcome
 
 
 def _payload(result, *, expected_task: str | None = None) -> dict:
     payload = {
-        "ok": result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"},
+        "ok": _outcome_value(result) in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"},
         "status": _status(result),
         "repair_attempts": result.repair_attempts,
         "task_id": result.task_id,
-        "outcome": result.outcome,
-        "classification": _class_value(result.classification),
+        "outcome": _outcome_value(result),
+        "classification": _class_value(result),
         "violation_paths": [] if result.scope is None else list(result.scope.violation_paths),
     }
     if expected_task is not None:
@@ -95,12 +123,12 @@ def _work_unit_task_id(report, expected_task: str | None) -> str | None:
 
 def _payload_from_work_unit(report, *, expected_task: str | None = None) -> dict:
     payload = {
-        "ok": report.outcome == "FINAL_VERIFICATION_PASSED",
+        "ok": _outcome_value(report) == "FINAL_VERIFICATION_PASSED",
         "status": _status(report),
         "repair_attempts": report.repair_attempts,
         "task_id": _work_unit_task_id(report, expected_task),
-        "outcome": report.outcome,
-        "classification": _class_value(report.classification),
+        "outcome": _outcome_value(report),
+        "classification": _class_value(report),
         "violation_paths": [],
     }
     if expected_task is not None:
@@ -109,9 +137,10 @@ def _payload_from_work_unit(report, *, expected_task: str | None = None) -> dict
 
 
 def _exit_for_result(result) -> int:
-    if result.outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
+    outcome = _outcome_value(result)
+    if outcome in {"TASK_COMPLETED", "FINAL_VERIFICATION_PASSED"}:
         return EXIT_OK
-    if result.outcome == "SCOPE_VIOLATION":
+    if outcome == "SCOPE_VIOLATION":
         return EXIT_POLICY
     return EXIT_INVALID
 

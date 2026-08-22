@@ -273,6 +273,9 @@ def test_cycle_hits_repair_limit(tmp_path: Path) -> None:
     assert result.outcome == "ESCALATED"
     assert result.state.state is ExecutionStatus.ESCALATED
     assert result.repair_attempts == 1
+    assert result.failure_class.value == "AGENT_REPAIRABLE"
+    assert result.code == "REPAIR_ATTEMPT_LIMIT"
+    assert result.message == "repair_attempt_limit reached"
     assert calls["n"] == 2
 
 
@@ -301,8 +304,8 @@ def test_environment_failure_is_not_repaired(tmp_path: Path) -> None:
         persist_state=False,
     )
     assert result.outcome == "FAILED"
-    assert result.classification is not None
-    assert result.classification.value == "ENVIRONMENT_FAILURE"
+    assert result.failure_class is not None
+    assert result.failure_class.value == "ENVIRONMENT_FAILURE"
     assert calls["n"] == 1
 
 

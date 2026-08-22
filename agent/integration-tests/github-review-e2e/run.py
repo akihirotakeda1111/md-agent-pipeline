@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.assertions import (
+    PRODUCTION_REVIEW_OUTCOMES,
     assert_comment_did_not_start_review,
     assert_execute_run,
     assert_linear_head_change,
@@ -596,6 +597,15 @@ def main() -> int:
                 outcome = production_terminal_outcome(
                     updated, latest_review_run, current_head=current_head
                 )
+                if outcome is not None and outcome not in PRODUCTION_REVIEW_OUTCOMES:
+                    raise ProductionBug(
+                        f"unknown Production outcome: {outcome}",
+                        evidence={
+                            "labels": list(updated.labels),
+                            "events": all_events,
+                            "coderabbit_terminal": scenario_a_terminal,
+                        },
+                    )
                 cr_kind = str((scenario_a_terminal or {}).get("kind") or "")
                 if outcome == "READY_FOR_HUMAN" and cr_kind == KIND_SKIPPED:
                     raise ProductionBug(

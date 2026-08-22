@@ -208,16 +208,18 @@ def _config_with_mention(mention: str | None):
     return replace(cfg, notification=replace(cfg.notification, mention=mention))
 
 
-def _work_unit_status(outcome: str) -> str:
-    if outcome == "FINAL_VERIFICATION_PASSED":
+def _work_unit_status(outcome) -> str:
+    value = outcome.value if hasattr(outcome, "value") else str(outcome)
+    if value == "FINAL_VERIFICATION_PASSED":
         return "PASSED"
-    return outcome
+    return value
 
 
-def _delivery_status(outcome: str) -> str:
-    if outcome == "PR_CREATED":
+def _delivery_status(outcome) -> str:
+    value = outcome.value if hasattr(outcome, "value") else str(outcome)
+    if value == "PR_CREATED":
         return "READY"
-    return outcome
+    return value
 
 
 def _delivery_reason(result: Any) -> str | None:
@@ -257,7 +259,8 @@ class ProductionPhase6Driver:
         )
         return WorkUnitResult(
             status=_work_unit_status(report.outcome),
-            reason=report.message or report.classification,
+            reason=report.message
+            or (None if report.failure_class is None else report.failure_class.value),
             artifacts=artifacts,
             current_task=report.current_task,
             completed_tasks=list(report.completed_tasks),
