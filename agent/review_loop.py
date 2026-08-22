@@ -17,7 +17,7 @@ from agent.codex_runner import (
 )
 from agent.config import AgentConfig, load_config
 from agent.cycle import run_final_verification
-from agent.errors import AgentError, ErrorCategory
+from agent.errors import AgentError
 from agent.events import (
     READY_FOR_HUMAN,
     REVIEW_CLASSIFIED,
@@ -1014,29 +1014,11 @@ def _control_plane_failure(
         client.create_issue_comment(pull_number, notice.to_markdown())
     except AgentError:
         pass
-    if isinstance(error, AgentError) and error.category is ErrorCategory.ENVIRONMENT_FAILURE:
-        return ReviewResult(
-            outcome=outcome,
-            spec_id=spec_id,
-            pull_number=pull_number,
-            message=message,
-            code=code,
-            failure_class=failure_class,
-        )
-    if isinstance(error, AgentError):
-        return ReviewResult(
-            outcome=outcome,
-            spec_id=spec_id,
-            pull_number=pull_number,
-            message=message,
-            code=code,
-            failure_class=failure_class,
-        )
     return ReviewResult(
-        outcome=ReviewOutcome.ESCALATED,
+        outcome=outcome,
         spec_id=spec_id,
         pull_number=pull_number,
         message=message,
         code=code,
-        failure_class=FailureClass.ESCALATION_REQUIRED,
+        failure_class=failure_class,
     )

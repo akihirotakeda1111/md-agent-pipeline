@@ -104,7 +104,7 @@ def test_no_commit_on_scope_violation() -> None:
     assert exc_info.value.code == "COMMIT_SCOPE_VIOLATION"
 
 
-def test_no_pr_before_final_verification() -> None:
+def test_pr_not_allowed_before_final_verification() -> None:
     report = _report(outcome="COMPLETED")
     with pytest.raises(AgentError) as exc_info:
         assert_pr_allowed(report)

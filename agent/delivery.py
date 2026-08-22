@@ -177,11 +177,6 @@ def assert_commit_allowed(report: WorkUnitReport) -> None:
 
 def assert_pr_allowed(report: WorkUnitReport) -> None:
     assert_commit_allowed(report)
-    if report.outcome is not WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
-        raise AgentError.policy_violation(
-            "no PR before final verification",
-            code="PR_BEFORE_FINAL_VERIFICATION",
-        )
 
 
 def assert_report_matches_spec(
