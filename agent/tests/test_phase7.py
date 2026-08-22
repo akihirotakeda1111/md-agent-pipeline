@@ -1492,6 +1492,18 @@ def test_classifier_request_uses_structured_output_and_review_key(tmp_path: Path
     assert body["model"] == "gpt-5.4-nano-2026-03-17"
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
+    schema = body["response_format"]["json_schema"]["schema"]
+    assert schema["required"] == ["classification", "confidence", "reason", "referencedPaths"]
+    assert "relevantTaskIds" not in schema.get("properties", {})
+    system = body["messages"][0]["content"]
+    user = body["messages"][1]["content"]
+    assert "technically correct" in system
+    assert "implementation candidate" in system
+    assert "whether repair should run" in system
+    assert spec.objective.strip() in user
+    assert spec.non_goals.strip() in user
+    assert spec.tasks[0].requirement.strip() in user
+    assert spec.final_verification.strip() in user
 
 
 def test_duplicate_outdated_event_does_not_mark_ready(tmp_path: Path) -> None:

@@ -21,6 +21,8 @@
   {"id":"R14","area":"scope","title":"repair scope violation does not commit or push","test":"test_repair_git.py::test_scope_violation_does_not_commit_or_push"},
   {"id":"R15","area":"validation","title":"Task Validation failure does not commit or push","test":"test_repair_git.py::test_task_validation_failure_does_not_commit_or_push"},
   {"id":"R16","area":"verification","title":"Final Verification failure does not commit or push","test":"test_repair_git.py::test_final_verification_failure_does_not_commit_or_push"},
+  {"id":"R16N","area":"repair","title":"no-change repair does not commit or push","test":"test_repair_git.py::test_no_change_repair_does_not_commit_or_push"},
+  {"id":"R16C","area":"repair","title":"repair prompt includes every task and not only current task","test":"test_repair_git.py::test_repair_prompt_includes_every_task_and_not_only_current_task"},
   {"id":"R17","area":"idempotency","title":"duplicate event does not repeat repair","test":"test_identity_convergence.py::test_duplicate_event_does_not_repeat_repair"},
   {"id":"R18","area":"convergence","title":"duplicate alone is not readiness evidence","test":"test_identity_convergence.py::test_duplicate_status_alone_does_not_establish_readiness"},
   {"id":"R19","area":"revision","title":"edited object is re-evaluated as a new revision","test":"test_identity_convergence.py::test_edited_feedback_is_reevaluated_as_new_revision"},

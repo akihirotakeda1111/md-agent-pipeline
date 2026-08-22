@@ -98,3 +98,41 @@ def test_final_verification_failure_does_not_commit_or_push(
     )
     assert result.status.upper() in {"FAILED", "ESCALATED"}
     assert_no_git_write(before, git_repo)
+
+
+def test_no_change_repair_does_not_commit_or_push(
+    phase7_driver, spec_path, git_repo, service_factory
+):
+    services = actionable_services(service_factory, git_repo, {})
+    before = snapshot(git_repo)
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
+    require_status(result, "ESCALATED")
+    assert_no_git_write(before, git_repo)
+    assert services.codex.invocations
+
+
+def test_repair_prompt_includes_every_task_and_not_only_current_task(
+    phase7_driver, spec_path, git_repo, service_factory
+):
+    feedback = current_feedback(git_repo)
+    feedback["path"] = "app/task-one.txt"
+    feedback["body"] = "Fix app/task-one.txt while keeping task-two valid."
+    services = service_factory(
+        github=github_responses(git_repo, [feedback], **coderabbit_completed(git_repo)),
+        classifier=[classification("ACTIONABLE", confidence=0.93, paths=("app/task-one.txt",))],
+        codex=[CodexStep({"app/review.txt": "repaired\n"})],
+    )
+    result = phase7_driver.run_review(
+        request(spec_path, git_repo, auto_repair_enabled=True), services
+    )
+    require_status(result, "REVIEW_FIX_PUSHED")
+    prompt = services.codex.invocations[0]["prompt"]
+    assert "# Current Task" not in prompt
+    assert "task-1" in prompt
+    assert "task-2" in prompt
+    assert "Keep `app/task-one.txt` valid." in prompt
+    assert "Keep `app/task-two.txt` valid." in prompt
+    assert "Accepted review comments are repair candidates, not verified facts." in prompt
+    assert "Do not guess" in prompt
