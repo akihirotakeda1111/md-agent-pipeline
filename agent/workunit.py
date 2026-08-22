@@ -144,38 +144,53 @@ def work_unit_outcome_from_cycle(outcome: CycleOutcome) -> WorkUnitOutcome:
     return mapped
 
 
-def validate_work_unit_report(report: WorkUnitReport) -> None:
+def _invalid_work_unit_report(message: str) -> AgentError:
+    return AgentError.invalid_input(message, code="INVALID_WORK_UNIT_REPORT")
+
+
+def validate_work_unit_report(report: WorkUnitReport, spec: TaskSpec | None = None) -> None:
     if not isinstance(report.outcome, WorkUnitOutcome):
-        raise AgentError.invalid_input(
-            f"work unit outcome is not WorkUnitOutcome: {report.outcome!r}",
-            code="INVALID_WORK_UNIT_REPORT",
+        raise _invalid_work_unit_report(
+            f"work unit outcome is not WorkUnitOutcome: {report.outcome!r}"
         )
     if report.schema_version != WORK_UNIT_REPORT_SCHEMA_VERSION:
-        raise AgentError.invalid_input(
-            f"unsupported work unit report schema_version: {report.schema_version!r}",
-            code="INVALID_WORK_UNIT_REPORT",
+        raise _invalid_work_unit_report(
+            f"unsupported work unit report schema_version: {report.schema_version!r}"
         )
     if report.code is not None and (not isinstance(report.code, str) or report.code == ""):
-        raise AgentError.invalid_input(
-            "work unit report code must be a non-empty string when set",
-            code="INVALID_WORK_UNIT_REPORT",
-        )
+        raise _invalid_work_unit_report("work unit report code must be a non-empty string when set")
     expected_fv, expected_validation, expected_scope = derived_compat_booleans(report.outcome)
     if report.final_verification_passed is not expected_fv:
-        raise AgentError.invalid_input(
-            "final_verification_passed does not match outcome",
-            code="INVALID_WORK_UNIT_REPORT",
-        )
+        raise _invalid_work_unit_report("final_verification_passed does not match outcome")
     if report.validation_passed is not expected_validation:
-        raise AgentError.invalid_input(
-            "validation_passed does not match outcome",
-            code="INVALID_WORK_UNIT_REPORT",
-        )
+        raise _invalid_work_unit_report("validation_passed does not match outcome")
     if report.scope_allowed is not expected_scope:
-        raise AgentError.invalid_input(
-            "scope_allowed does not match outcome",
-            code="INVALID_WORK_UNIT_REPORT",
-        )
+        raise _invalid_work_unit_report("scope_allowed does not match outcome")
+    if tuple(report.completed_tasks) != tuple(report.state.completed_tasks):
+        raise _invalid_work_unit_report("completed_tasks does not match execution state")
+    if report.repair_attempts != report.state.repair_attempts:
+        raise _invalid_work_unit_report("repair_attempts does not match execution state")
+    if report.branch != report.state.branch:
+        raise _invalid_work_unit_report("branch does not match execution state")
+    if len(report.completed_tasks) != len(set(report.completed_tasks)):
+        raise _invalid_work_unit_report("completed_tasks contains duplicate task ids")
+    if spec is not None:
+        spec_ids = tuple(task.id for task in spec.tasks)
+        spec_set = set(spec_ids)
+        unknown = [task_id for task_id in report.completed_tasks if task_id not in spec_set]
+        if unknown:
+            raise _invalid_work_unit_report(
+                "completed_tasks contains unknown task ids: " + ", ".join(unknown)
+            )
+        if report.outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
+            missing = [
+                task_id for task_id in spec_ids if task_id not in set(report.completed_tasks)
+            ]
+            if missing:
+                raise _invalid_work_unit_report(
+                    "FINAL_VERIFICATION_PASSED requires all tasks completed; missing: "
+                    + ", ".join(missing)
+                )
     if report.outcome in _RECONCILE_OUTCOMES:
         return
     if report.outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED:
@@ -294,7 +309,7 @@ def _build_work_unit_report(
     patch_sha256: str = "",
 ) -> WorkUnitReport:
     final_verification_passed, validation_passed, allowed = derived_compat_booleans(outcome)
-    return WorkUnitReport(
+    report = WorkUnitReport(
         outcome=outcome,
         spec_id=spec.id,
         spec_path=spec.source_path or "",
@@ -317,6 +332,8 @@ def _build_work_unit_report(
         patch_file=patch_file,
         patch_sha256=patch_sha256,
     )
+    validate_work_unit_report(report, spec=spec)
+    return report
 
 
 def report_from_cycle(
@@ -386,10 +403,10 @@ def report_from_preparation_error(
             spec=spec,
             base_sha=base_sha,
             state=state,
-            completed_tasks=(),
+            completed_tasks=state.completed_tasks,
             changed_files=(),
             validation_results=(),
-            repair_attempts=0,
+            repair_attempts=state.repair_attempts,
             message=message,
             failure_class=FailureClass.ESCALATION_REQUIRED,
             code="STATE_TAMPERED",
@@ -434,10 +451,19 @@ def write_work_unit_report(report_dir: Path | str, report: WorkUnitReport) -> Pa
     return path
 
 
-def load_work_unit_report(report_dir: Path | str) -> WorkUnitReport:
+def load_work_unit_report(
+    report_dir: Path | str, *, spec: TaskSpec | None = None
+) -> WorkUnitReport:
     path = Path(report_dir) / "report.json"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise AgentError.invalid_input(
+            f"work unit report could not be read: {path}",
+            code="INVALID_WORK_UNIT_REPORT",
+        ) from exc
+    try:
+        payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise AgentError.invalid_input(
             "work unit report is not valid JSON",
@@ -476,6 +502,7 @@ def load_work_unit_report(report_dir: Path | str) -> WorkUnitReport:
         patch_sha256=payload["patch_sha256"],
         schema_version=payload["schema_version"],
     )
+    validate_work_unit_report(report, spec=spec)
     return report
 
 

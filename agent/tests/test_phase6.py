@@ -64,19 +64,29 @@ def _report(**overrides: object) -> WorkUnitReport:
         failure_class = FailureClass.ESCALATION_REQUIRED
     elif outcome is WorkUnitOutcome.SCOPE_VIOLATION:
         failure_class = FailureClass.ESCALATION_REQUIRED
-    state = overrides.pop("state", None) or new_execution_state(spec)
+    state = overrides.pop("state", None)
+    spec_task_ids = tuple(task.id for task in spec.tasks)
+    if state is None:
+        completed = spec_task_ids if outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED else ()
+        state = replace(new_execution_state(spec), completed_tasks=completed)
+    elif (
+        outcome is WorkUnitOutcome.FINAL_VERIFICATION_PASSED
+        and "completed_tasks" not in overrides
+        and set(state.completed_tasks) != set(spec_task_ids)
+    ):
+        state = replace(state, completed_tasks=spec_task_ids)
     payload = {
         "outcome": outcome,
         "spec_id": spec.id,
         "spec_path": spec.source_path,
         "spec_sha256": spec.spec_sha256,
         "base_sha": "a" * 40,
-        "branch": spec.target_branch,
+        "branch": state.branch,
         "state": state,
-        "completed_tasks": ("task-1",),
+        "completed_tasks": state.completed_tasks,
         "changed_files": ("worker/app.py",),
         "validation_results": ("python check.py",),
-        "repair_attempts": 0,
+        "repair_attempts": state.repair_attempts,
         "final_verification_passed": final_passed,
         "validation_passed": validation_passed,
         "scope_allowed": scope_allowed,

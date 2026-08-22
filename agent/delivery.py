@@ -251,7 +251,7 @@ def run_delivery(
         repo_root=root,
         spec_directory=cfg.task_spec.directory,
     )
-    report = load_work_unit_report(report_dir)
+    report = load_work_unit_report(report_dir, spec=parsed)
     client = github
     try:
         if client is None:
@@ -429,7 +429,7 @@ def _report_failure(
         notice=notice,
         summary="",
         message=report.message,
-        code=report.code or (None if report.failure_class is None else report.failure_class.value),
+        code=report.code,
         failure_class=classification,
     )
     _notify(github, spec, result, cfg)

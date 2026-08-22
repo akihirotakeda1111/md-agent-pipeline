@@ -235,6 +235,115 @@ def test_work_unit_compat_booleans_match_outcome() -> None:
         _report(outcome="FAILED", final_verification_passed=True)
 
 
+def test_work_unit_report_state_fields_must_agree() -> None:
+    spec = _spec()
+    empty = new_execution_state(spec)
+    with pytest.raises(AgentError) as exc_info:
+        _report(completed_tasks=("task-1",), state=empty)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+    with pytest.raises(AgentError) as exc_info:
+        _report(repair_attempts=2, state=empty)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+    with pytest.raises(AgentError) as exc_info:
+        _report(branch="feature/other", state=empty)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+
+def test_work_unit_report_rejects_unknown_duplicate_and_missing_tasks() -> None:
+    spec = _spec()
+    with pytest.raises(AgentError) as exc_info:
+        _report(
+            outcome="FAILED",
+            completed_tasks=("task-1", "task-1"),
+            state=replace(new_execution_state(spec), completed_tasks=("task-1", "task-1")),
+        )
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+    unknown = _report(
+        outcome="FAILED",
+        completed_tasks=("ghost",),
+        state=replace(new_execution_state(spec), completed_tasks=("ghost",)),
+    )
+    with pytest.raises(AgentError) as exc_info:
+        validate_work_unit_report(unknown, spec=spec)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+    partial = _report(
+        completed_tasks=("task-1",),
+        state=replace(new_execution_state(spec), completed_tasks=("task-1",)),
+    )
+    with pytest.raises(AgentError) as exc_info:
+        validate_work_unit_report(partial, spec=spec)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+    validate_work_unit_report(_report(), spec=spec)
+
+
+def test_load_work_unit_report_types_io_errors(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    with pytest.raises(AgentError) as exc_info:
+        load_work_unit_report(missing)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "report.json").mkdir()
+    with pytest.raises(AgentError) as exc_info:
+        load_work_unit_report(unreadable)
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+
+def test_missing_report_fails_closed_before_delivery(tmp_path: Path) -> None:
+    from agent.delivery import run_delivery
+
+    with pytest.raises(AgentError) as exc_info:
+        run_delivery(
+            _spec(),
+            repo_root=REPO_ROOT,
+            report_dir=tmp_path / "absent",
+            github=object(),  # type: ignore[arg-type]
+        )
+    assert exc_info.value.code == "INVALID_WORK_UNIT_REPORT"
+
+
+def test_delivery_failure_code_is_not_failure_class() -> None:
+    from agent.config import load_config
+    from agent.delivery import _report_failure
+
+    class Github:
+        def list_open_pulls(self, head_branch=None):
+            return []
+
+        def create_issue(self, **kwargs):
+            return {"number": 1}
+
+    spec = _spec()
+    github = Github()
+    failed = _report_failure(spec, _report(outcome="FAILED"), load_config(), github)
+    assert failed.code is None
+    assert failed.failure_class is FailureClass.ENVIRONMENT_FAILURE
+    coded = _report_failure(
+        spec,
+        _report(
+            outcome="ESCALATED",
+            failure_class=FailureClass.AGENT_REPAIRABLE,
+            code="REPAIR_ATTEMPT_LIMIT",
+        ),
+        load_config(),
+        github,
+    )
+    assert coded.code == "REPAIR_ATTEMPT_LIMIT"
+    assert coded.failure_class is FailureClass.ESCALATION_REQUIRED
+
+
+def test_unreadable_report_exit_is_not_internal() -> None:
+    error = AgentError.invalid_input(
+        "work unit report could not be read",
+        code="INVALID_WORK_UNIT_REPORT",
+    )
+    assert _exit_for_error(error) == EXIT_INVALID
+
+
 def test_reconcile_outcomes_remain_valid() -> None:
     spec = _spec()
     from agent.reconcile import ReconcileResult
